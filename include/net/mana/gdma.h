@@ -830,7 +830,8 @@ int mana_gd_alloc_res_map(u32 res_avail, struct gdma_resource *r);
 void mana_gd_free_res_map(struct gdma_resource *r);
 
 void mana_gd_wq_ring_doorbell(struct gdma_context *gc,
-			      struct gdma_queue *queue);
+			      struct gdma_queue *queue,
+			      u8 num_req);
 
 int mana_gd_alloc_memory(struct gdma_context *gc, unsigned int length,
 			 struct gdma_mem_info *gmi);
