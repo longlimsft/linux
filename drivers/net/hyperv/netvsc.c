@@ -1390,6 +1390,7 @@ static int netvsc_receive(struct net_device *ndev,
 	struct vmbus_channel *channel = nvchan->channel;
 	const struct vmtransfer_page_packet_header *vmxferpage_packet
 		= container_of(desc, const struct vmtransfer_page_packet_header, d);
+	const struct vmtransfer_page_range *ranges;
 	const struct nvsp_message *nvsp = hv_pkt_data(desc);
 	u32 msglen = hv_pkt_datalen(desc);
 	u16 q_idx = channel->offermsg.offer.sub_channel_index;
@@ -1441,9 +1442,10 @@ static int netvsc_receive(struct net_device *ndev,
 	}
 
 	/* Each range represents 1 RNDIS pkt that contains 1 ethernet frame */
+	ranges = vmxferpage_packet->ranges;
 	for (i = 0; i < count; i++) {
-		u32 offset = vmxferpage_packet->ranges[i].byte_offset;
-		u32 buflen = vmxferpage_packet->ranges[i].byte_count;
+		u32 offset = ranges[i].byte_offset;
+		u32 buflen = ranges[i].byte_count;
 		void *data;
 		int ret;
 
