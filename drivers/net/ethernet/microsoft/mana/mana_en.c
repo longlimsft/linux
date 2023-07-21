@@ -625,6 +625,7 @@ static int mana_change_mtu(struct net_device *ndev, int new_mtu)
 
 out:
 	mana_pre_dealloc_rxbufs(mpc);
+	printk(KERN_ERR "%s: err %d\n", __func__, err);
 	return err;
 }
 

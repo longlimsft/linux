@@ -486,6 +486,14 @@ int mana_ib_get_port_immutable(struct ib_device *ibdev, u32 port_num,
 int mana_ib_query_device(struct ib_device *ibdev, struct ib_device_attr *props,
 			 struct ib_udata *uhw)
 {
+	struct mana_query_device_resp resp = {};
+	struct mana_ib_dev *mdev;
+	int ret = 0;
+
+	mdev = container_of(ibdev, struct mana_ib_dev, ib_dev);
+
+	resp.phy_max_mtu = mdev->gdma_dev->gdma_context->adapter_mtu;
+
 	props->max_qp = MANA_MAX_NUM_QUEUES;
 	props->max_qp_wr = MAX_SEND_BUFFERS_PER_QUEUE;
 
@@ -501,7 +509,10 @@ int mana_ib_query_device(struct ib_device *ibdev, struct ib_device_attr *props,
 	props->max_send_sge = MAX_TX_WQE_SGL_ENTRIES;
 	props->max_recv_sge = MAX_RX_WQE_SGL_ENTRIES;
 
-	return 0;
+	if (uhw->outlen && uhw->outlen >= sizeof(resp))
+		ret = ib_copy_to_udata(uhw, &resp, sizeof(resp));
+
+	return ret;
 }
 
 int mana_ib_query_port(struct ib_device *ibdev, u32 port,
