@@ -2758,9 +2758,9 @@ static int netvsc_netdev_event(struct notifier_block *this,
 	case NETDEV_UNREGISTER:
 		return netvsc_unregister_vf(event_dev);
 	case NETDEV_UP:
-	case NETDEV_DOWN:
-	case NETDEV_CHANGE:
-	case NETDEV_GOING_DOWN:
+//	case NETDEV_DOWN:
+//	case NETDEV_CHANGE:
+//	case NETDEV_GOING_DOWN:
 		return netvsc_vf_changed(event_dev, event);
 	default:
 		return NOTIFY_DONE;
