@@ -78,22 +78,34 @@ static int mana_ib_probe(struct auxiliary_device *adev,
 	dev->ib_dev.num_comp_vectors = 1;
 	dev->ib_dev.dev.parent = mdev->gdma_context->dev;
 
+	ret = mana_ib_create_eq(dev);
+	if (ret) {
+		ibdev_dbg(&dev->ib_dev, "Failed to create eq, ret %d\n", ret);
+		goto failed_eq;
+	}
+
 	ret = ib_register_device(&dev->ib_dev, "mana_%d",
 				 mdev->gdma_context->dev);
-	if (ret) {
-		ib_dealloc_device(&dev->ib_dev);
-		return ret;
-	}
+	if (ret)
+		goto failed_register;
 
 	dev_set_drvdata(&adev->dev, dev);
 
 	return 0;
+
+failed_register:
+	mana_ib_destroy_eq(dev);
+
+failed_eq:
+	ib_dealloc_device(&dev->ib_dev);
+	return ret;
 }
 
 static void mana_ib_remove(struct auxiliary_device *adev)
 {
 	struct mana_ib_dev *dev = dev_get_drvdata(&adev->dev);
 
+	mana_ib_destroy_eq(dev);
 	ib_unregister_device(&dev->ib_dev);
 	ib_dealloc_device(&dev->ib_dev);
 }

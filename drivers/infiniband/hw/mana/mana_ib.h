@@ -30,6 +30,7 @@
 struct mana_ib_dev {
 	struct ib_device ib_dev;
 	struct gdma_dev *gdma_dev;
+	struct mana_eq *eqs;
 };
 
 struct mana_ib_wq {
@@ -67,6 +68,8 @@ struct mana_ib_cq {
 	int cqe;
 	u64 gdma_region;
 	u64 id;
+	bool id_valid;
+	u32 comp_vector;
 };
 
 struct mana_ib_qp {
@@ -158,5 +161,10 @@ int mana_ib_query_gid(struct ib_device *ibdev, u32 port, int index,
 		      union ib_gid *gid);
 
 void mana_ib_disassociate_ucontext(struct ib_ucontext *ibcontext);
+
+void mana_ib_cq_handler(void *ctx, struct gdma_queue *gdma_cq);
+
+void mana_ib_destroy_eq(struct mana_ib_dev *mdev);
+int mana_ib_create_eq(struct mana_ib_dev *mdev);
 
 #endif

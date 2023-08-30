@@ -143,6 +143,68 @@ int mana_ib_dealloc_pd(struct ib_pd *ibpd, struct ib_udata *udata)
 	return err;
 }
 
+void mana_ib_destroy_eq(struct mana_ib_dev *mdev)
+{
+	struct gdma_context *gc = mdev->gdma_dev->gdma_context;
+	struct gdma_queue *eq;
+	int i;
+
+	for (i = 0; i < gc->max_num_queues; i++) {
+		eq = mdev->eqs[i].eq;
+		if (!eq)
+			continue;
+
+		mana_gd_destroy_queue(gc, eq);
+	}
+
+	kfree(mdev->eqs);
+	mdev->eqs = NULL;
+}
+
+int mana_ib_create_eq(struct mana_ib_dev *mdev)
+{
+	struct gdma_queue_spec spec = {};
+	struct gdma_queue *queue;
+	struct gdma_context *gc;
+	struct gdma_dev *gd;
+	int err;
+	int i;
+
+	gd = mdev->gdma_dev;
+
+	gc = gd->gdma_context;
+
+	mdev->eqs = kcalloc(gc->max_num_queues, sizeof(struct mana_eq),
+				GFP_KERNEL);
+	if (!mdev->eqs)
+		return -ENOMEM;
+
+	spec.type = GDMA_EQ;
+	spec.monitor_avl_buf = false;
+	spec.queue_size = EQ_SIZE;
+	spec.eq.callback = NULL;
+	spec.eq.context = mdev->eqs;
+	spec.eq.log2_throttle_limit = LOG2_EQ_THROTTLE;
+	spec.eq.msix_allocated = true;
+
+	for (i = 0; i < gc->max_num_queues; i++) {
+		spec.eq.msix_index = i;
+		err = mana_gd_create_mana_eq(gd, &spec, &queue);
+		if (err)
+			goto out;
+
+		queue->eq.disable_needed = true;
+		mdev->eqs[i].eq = queue;
+	}
+
+	return 0;
+
+out:
+	ibdev_dbg(&mdev->ib_dev, "Failed to allocated eq err %d\n", err);
+	mana_ib_destroy_eq(mdev);
+	return err;
+}
+
 static int mana_gd_destroy_doorbell_page(struct gdma_context *gc,
 					 int doorbell_page)
 {
