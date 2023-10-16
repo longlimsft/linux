@@ -8,7 +8,7 @@
 void mana_ib_uncfg_vport(struct mana_ib_dev *dev, struct mana_ib_pd *pd,
 			 u32 port)
 {
-	struct gdma_dev *gd = dev->gdma_dev;
+	struct gdma_dev *gd = &dev->gdma_dev->gdma_context->mana;
 	struct mana_port_context *mpc;
 	struct net_device *ndev;
 	struct mana_context *mc;
@@ -31,7 +31,7 @@ void mana_ib_uncfg_vport(struct mana_ib_dev *dev, struct mana_ib_pd *pd,
 int mana_ib_cfg_vport(struct mana_ib_dev *dev, u32 port, struct mana_ib_pd *pd,
 		      u32 doorbell_id)
 {
-	struct gdma_dev *mdev = dev->gdma_dev;
+	struct gdma_dev *mdev = &dev->gdma_dev->gdma_context->mana;
 	struct mana_port_context *mpc;
 	struct mana_context *mc;
 	struct net_device *ndev;
@@ -80,6 +80,7 @@ int mana_ib_alloc_pd(struct ib_pd *ibpd, struct ib_udata *udata)
 	enum gdma_pd_flags flags = 0;
 	struct mana_ib_dev *dev;
 	struct gdma_dev *mdev;
+
 	int err;
 
 	dev = container_of(ibdev, struct mana_ib_dev, ib_dev);
@@ -486,20 +487,19 @@ int mana_ib_get_port_immutable(struct ib_device *ibdev, u32 port_num,
 int mana_ib_query_device(struct ib_device *ibdev, struct ib_device_attr *props,
 			 struct ib_udata *uhw)
 {
-	props->max_qp = MANA_MAX_NUM_QUEUES;
-	props->max_qp_wr = MAX_SEND_BUFFERS_PER_QUEUE;
+	struct mana_ib_dev *dev = container_of(ibdev,
+			struct mana_ib_dev, ib_dev);
 
-	/*
-	 * max_cqe could be potentially much bigger.
-	 * As this version of driver only support RAW QP, set it to the same
-	 * value as max_qp_wr
-	 */
-	props->max_cqe = MAX_SEND_BUFFERS_PER_QUEUE;
-
+	props->max_qp = dev->adapter_caps.max_qp_count;
+	props->max_qp_wr = dev->adapter_caps.max_requester_sq_size;
+	props->max_cqe = dev->adapter_caps.max_requester_sq_size;
+	props->max_mr = dev->adapter_caps.max_mr_count;
 	props->max_mr_size = MANA_IB_MAX_MR_SIZE;
-	props->max_mr = MANA_IB_MAX_MR;
 	props->max_send_sge = MAX_TX_WQE_SGL_ENTRIES;
 	props->max_recv_sge = MAX_RX_WQE_SGL_ENTRIES;
+
+	printk(KERN_ERR "%s: max_qp %d max_qp_wr %d max_cqe %d max_mr %d max_send_sge %d max_recv_sge %d\n", __func__,
+			props->max_qp, props->max_qp_wr, props->max_cqe, props->max_mr, props->max_send_sge, props->max_recv_sge);
 
 	return 0;
 }
@@ -520,4 +520,153 @@ int mana_ib_query_gid(struct ib_device *ibdev, u32 port, int index,
 
 void mana_ib_disassociate_ucontext(struct ib_ucontext *ibcontext)
 {
+}
+
+int mana_ib_destroy_adapter(struct mana_ib_dev *dev)
+{
+	struct mana_ib_destroy_adapter_resp resp = {};
+	struct mana_ib_destroy_adapter_req req = {};
+	struct gdma_context *gc;
+	int err;
+
+	gc = dev->gdma_dev->gdma_context;
+
+	mana_gd_init_req_hdr(&req.hdr, MANA_IB_DESTROY_ADAPTER, sizeof(req),
+			     sizeof(resp));
+	req.adapter = dev->adapter_handle;
+	req.hdr.dev_id = gc->mana_ib.dev_id;
+
+	err = mana_gd_send_request(gc, sizeof(req), &req, sizeof(resp), &resp);
+
+	if (err) {
+		ibdev_err(&dev->ib_dev, "Failed to destroy adapter err %d", err);
+		return err;
+	}
+
+	return 0;
+}
+
+int mana_ib_create_adapter(struct mana_ib_dev *dev)
+{
+	struct mana_ib_create_adapter_resp resp = {};
+	struct mana_ib_create_adapter_req req = {};
+	struct gdma_context *gc;
+	int err;
+
+	gc = dev->gdma_dev->gdma_context;
+
+	mana_gd_init_req_hdr(&req.hdr, MANA_IB_CREATE_ADAPTER, sizeof(req),
+			     sizeof(resp));
+	req.notify_eq_id = dev->fatal_err_eq->id;
+	req.hdr.dev_id = gc->mana_ib.dev_id;
+
+	err = mana_gd_send_request(gc, sizeof(req), &req, sizeof(resp), &resp);
+
+	if (err) {
+		ibdev_err(&dev->ib_dev, "Failed to create adapter err %d",
+			  err);
+		return err;
+	}
+
+	dev->adapter_handle = resp.adapter;
+
+	return 0;
+}
+
+static void mana_ib_critical_event_handler(void *ctx, struct gdma_queue *queue,
+				      struct gdma_event *event)
+{
+	struct mana_ib_dev *dev = (struct mana_ib_dev *)ctx;
+	struct ib_event mib_event;
+	struct mana_ib_qp *qp;
+	u64 rq_id;
+	switch (event->type) {
+	case GDMA_EQE_SOC_EVENT_NOTIFICATION:
+		rq_id = event->details[0] & 0xFFFFFF;
+		qp = xa_load(&dev->rq_to_qp_lookup_table, rq_id);
+		mib_event.event = IB_EVENT_QP_FATAL;
+		mib_event.device = &dev->ib_dev;
+		if (qp && qp->ibqp.event_handler)
+			qp->ibqp.event_handler(&mib_event, qp->ibqp.qp_context);
+		else
+			ibdev_dbg(&dev->ib_dev, "found no qp or event handler");
+		ibdev_dbg(&dev->ib_dev, "Received critical notification");
+		break;
+	default:
+		ibdev_dbg(&dev->ib_dev, "Received unsolicited evt %d",
+			  event->type);
+	}
+}
+
+int mana_ib_create_error_eq(struct mana_ib_dev *dev)
+{
+	struct gdma_queue_spec spec = {};
+	int err;
+
+	spec.type = GDMA_EQ;
+	spec.monitor_avl_buf = false;
+	spec.queue_size = EQ_SIZE;
+	spec.eq.callback = mana_ib_critical_event_handler;
+	spec.eq.context = dev;
+	spec.eq.log2_throttle_limit = LOG2_EQ_THROTTLE;
+	spec.eq.msix_allocated = true;
+	spec.eq.msix_index = 0;
+	spec.doorbell = dev->gdma_dev->doorbell;
+	spec.pdid = dev->gdma_dev->pdid;
+
+	err = mana_gd_create_mana_eq(dev->gdma_dev, &spec,
+				     &dev->fatal_err_eq);
+	if (err)
+		return err;
+
+	dev->fatal_err_eq->eq.disable_needed = true;
+
+	return 0;
+}
+
+static void assign_caps(struct mana_ib_adapter_caps *caps,
+			struct mana_ib_query_adapter_caps_resp *resp)
+{
+	caps->max_sq_id = resp->max_sq_id;
+	caps->max_rq_id = resp->max_rq_id;
+	caps->max_cq_id = resp->max_cq_id;
+	caps->max_qp_count = resp->max_qp_count;
+	caps->max_cq_count = resp->max_cq_count;
+	caps->max_mr_count = resp->max_mr_count;
+	caps->max_pd_count = resp->max_pd_count;
+	caps->max_inbound_read_limit = resp->max_inbound_read_limit;
+	caps->max_outbound_read_limit = resp->max_outbound_read_limit;
+	caps->mw_count = resp->mw_count;
+	caps->max_srq_count = resp->max_srq_count;
+	caps->max_requester_sq_size = resp->max_requester_sq_size;
+	caps->max_responder_sq_size = resp->max_responder_sq_size;
+	caps->max_requester_rq_size = resp->max_requester_rq_size;
+	caps->max_responder_rq_size = resp->max_responder_rq_size;
+	caps->max_inline_data_size = resp->max_inline_data_size;
+	caps->max_send_wqe_size = MAX_TX_WQE_SGL_ENTRIES;
+	caps->max_recv_wqe_size = MAX_RX_WQE_SGL_ENTRIES;
+}
+
+int mana_ib_query_adapter_caps(struct mana_ib_dev *dev)
+{
+	struct mana_ib_query_adapter_caps_resp resp = {};
+	struct mana_ib_query_adapter_caps_req req = {};
+	int err;
+
+	mana_gd_init_req_hdr(&req.hdr, MANA_IB_GET_ADAPTER_CAP, sizeof(req),
+			     sizeof(resp));
+	req.hdr.resp.msg_version = GDMA_MESSAGE_V3;
+	req.hdr.dev_id = dev->gdma_dev->dev_id;
+
+	err = mana_gd_send_request(dev->gdma_dev->gdma_context, sizeof(req),
+				   &req, sizeof(resp), &resp);
+
+	if (err) {
+		ibdev_err(&dev->ib_dev,
+			  "Failed to query adapter caps err %d", err);
+		return err;
+	}
+
+	assign_caps(&dev->adapter_caps, &resp);
+	return 0;
 }
