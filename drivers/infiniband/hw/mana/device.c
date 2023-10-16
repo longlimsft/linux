@@ -55,6 +55,8 @@ static int mana_ib_probe(struct auxiliary_device *adev,
 	struct mana_ib_dev *dev;
 	int ret;
 
+	printk(KERN_ERR "LL: %s\n", __func__);
+
 	mc = mdev->driver_data;
 
 	dev = ib_alloc_device(mana_ib_dev, ib_dev);
@@ -68,7 +70,6 @@ static int mana_ib_probe(struct auxiliary_device *adev,
 	ibdev_dbg(&dev->ib_dev, "mdev=%p id=%d num_ports=%d\n", mdev,
 		  mdev->dev_id.as_uint32, dev->ib_dev.phys_port_cnt);
 
-	dev->gdma_dev = mdev;
 	dev->ib_dev.node_type = RDMA_NODE_IB_CA;
 
 	/*
@@ -78,23 +79,62 @@ static int mana_ib_probe(struct auxiliary_device *adev,
 	dev->ib_dev.num_comp_vectors = 1;
 	dev->ib_dev.dev.parent = mdev->gdma_context->dev;
 
+	ret = mana_gd_register_device(&mdev->gdma_context->mana_ib);
+	if (ret) {
+		ibdev_err(&dev->ib_dev, "Failed to register device, ret %d",
+			  ret);
+		goto free_ib_device;
+	}
+	dev->gdma_dev = &mdev->gdma_context->mana_ib;
+
+	ret = mana_ib_create_error_eq(dev);
+	if (ret) {
+		ibdev_err(&dev->ib_dev, "Failed to allocate err eq");
+		goto deregister_device;
+	}
+
+	ret = mana_ib_create_adapter(dev);
+	if (ret) {
+		ibdev_err(&dev->ib_dev, "Failed to create adapter");
+		goto free_error_eq;
+	}
+
+	ret = mana_ib_query_adapter_caps(dev);
+	if (ret)
+		ibdev_dbg(&dev->ib_dev, "Failed to get caps, use defaults");
+
+	xa_init(&dev->rq_to_qp_lookup_table);
+
 	ret = ib_register_device(&dev->ib_dev, "mana_%d",
 				 mdev->gdma_context->dev);
-	if (ret) {
-		ib_dealloc_device(&dev->ib_dev);
-		return ret;
-	}
+	if (ret)
+		goto destroy_adapter;
 
 	dev_set_drvdata(&adev->dev, dev);
 
 	return 0;
+
+destroy_adapter:
+	mana_ib_destroy_adapter(dev);
+	xa_destroy(&dev->rq_to_qp_lookup_table);
+free_error_eq:
+	mana_gd_destroy_queue(dev->gdma_dev->gdma_context, dev->fatal_err_eq);
+deregister_device:
+	mana_gd_deregister_device(dev->gdma_dev);
+free_ib_device:
+	ib_dealloc_device(&dev->ib_dev);
+	return ret;
 }
 
 static void mana_ib_remove(struct auxiliary_device *adev)
 {
 	struct mana_ib_dev *dev = dev_get_drvdata(&adev->dev);
 
+	mana_gd_destroy_queue(dev->gdma_dev->gdma_context, dev->fatal_err_eq);
+	mana_ib_destroy_adapter(dev);
+	mana_gd_deregister_device(dev->gdma_dev);
 	ib_unregister_device(&dev->ib_dev);
+	xa_destroy(&dev->rq_to_qp_lookup_table);
 	ib_dealloc_device(&dev->ib_dev);
 }
 

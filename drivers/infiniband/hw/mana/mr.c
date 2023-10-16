@@ -58,8 +58,8 @@ static int mana_ib_gd_create_mr(struct mana_ib_dev *dev, struct mana_ib_mr *mr,
 	err = mana_gd_send_request(gc, sizeof(req), &req, sizeof(resp), &resp);
 
 	if (err || resp.hdr.status) {
-		ibdev_dbg(&dev->ib_dev, "Failed to create mr %d, %u", err,
-			  resp.hdr.status);
+		ibdev_dbg(&dev->ib_dev, "Failed to create mr %d, %u",
+			  err, resp.hdr.status);
 		if (!err)
 			err = -EPROTO;
 
@@ -90,8 +90,8 @@ static int mana_ib_gd_destroy_mr(struct mana_ib_dev *dev, u64 mr_handle)
 
 	err = mana_gd_send_request(gc, sizeof(req), &req, sizeof(resp), &resp);
 	if (err || resp.hdr.status) {
-		dev_err(gc->dev, "Failed to destroy MR: %d, 0x%x\n", err,
-			resp.hdr.status);
+		dev_err(gc->dev, "Failed to destroy MR: %d, 0x%x\n",
+			err, resp.hdr.status);
 		if (!err)
 			err = -EPROTO;
 		return err;
