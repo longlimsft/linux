@@ -476,8 +476,12 @@ int mana_ib_query_device(struct ib_device *ibdev, struct ib_device_attr *props,
 	props->max_qp_wr = mib_dev->adapter_caps.max_requester_sq_size;
 	props->max_cqe = mib_dev->adapter_caps.max_requester_sq_size;
 	props->max_mr = mib_dev->adapter_caps.max_mr_count;
+	props->max_mr_size = MANA_IB_MAX_MR_SIZE;
 	props->max_send_sge = mib_dev->adapter_caps.max_send_wqe_size;
 	props->max_recv_sge = mib_dev->adapter_caps.max_recv_wqe_size;
+
+	printk(KERN_ERR "%s: max_qp %d max_qp_wr %d max_cqe %d max_mr %d max_send_sge %d max_recv_sge %d\n", __func__,
+			props->max_qp, props->max_qp_wr, props->max_cqe, props->max_mr, props->max_send_sge, props->max_recv_sge);
 
 	return 0;
 }
