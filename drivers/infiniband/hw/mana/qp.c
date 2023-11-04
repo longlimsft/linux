@@ -101,7 +101,8 @@ static int mana_ib_create_qp_rss(struct ib_qp *ibqp, struct ib_pd *pd,
 		container_of(pd->device, struct mana_ib_dev, ib_dev);
 	struct ib_rwq_ind_table *ind_tbl = attr->rwq_ind_tbl;
 	struct mana_ib_create_qp_rss_resp resp = {};
-	struct gdma_dev *gd = mib_dev->gdma_dev;
+//	struct gdma_dev *gd = mib_dev->gdma_dev;
+	struct gdma_dev *gd = &mib_dev->gc->mana;
 	struct mana_ib_create_qp_rss ucmd = {};
 	mana_handle_t *mana_ind_table;
 	struct mana_port_context *mpc;
@@ -115,6 +116,8 @@ static int mana_ib_create_qp_rss(struct ib_qp *ibqp, struct ib_pd *pd,
 	int i = 0;
 	u32 port;
 	int ret;
+
+	printk(KERN_ERR "%s: pd->device=%px mib_dev=%px gd=%px\n", __func__, pd->device, mib_dev, gd);
 
 	mc = gd->driver_data;
 
@@ -279,6 +282,8 @@ static int mana_ib_create_qp_raw(struct ib_qp *ibqp, struct ib_pd *ibpd,
 	struct ib_umem *umem;
 	int err;
 	u32 port;
+
+	printk(KERN_ERR "%s: ibpd->device=%px mib_dev=%px gd=%px\n", __func__, ibpd->device, mib_dev, gd);
 
 	mc = gd->driver_data;
 

@@ -55,6 +55,8 @@ static int mana_ib_probe(struct auxiliary_device *adev,
 	struct mana_context *mc;
 	int ret;
 
+	printk(KERN_ERR "LL: %s\n", __func__);
+
 	mc = mdev->driver_data;
 
 	mib_dev = ib_alloc_device(mana_ib_dev, ib_dev);

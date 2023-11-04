@@ -106,7 +106,7 @@ struct mana_ib_ucontext {
 
 struct mana_ib_dev {
 	struct ib_device ib_dev;
-	struct gdma_dev *gdma_dev;
+//	struct gdma_dev *gdma_dev;
 	struct gdma_context *gc;
 	struct gdma_queue *fatal_err_eq;
 	mana_handle_t adapter_handle;

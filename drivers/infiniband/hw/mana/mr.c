@@ -160,7 +160,8 @@ struct ib_mr *mana_ib_reg_user_mr(struct ib_pd *ibpd, u64 start, u64 length,
 	return &mr->ibmr;
 
 err_dma_region:
-	mana_gd_destroy_dma_region(mib_dev->gdma_dev->gdma_context,
+//	mana_gd_destroy_dma_region(mib_dev->gdma_dev->gdma_context,
+	mana_gd_destroy_dma_region(mib_dev->gc,
 				   dma_region_handle);
 
 err_umem:
