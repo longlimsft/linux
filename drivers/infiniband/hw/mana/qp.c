@@ -132,7 +132,8 @@ static int mana_ib_create_qp_rss(struct ib_qp *ibqp, struct ib_pd *pd,
 		return ret;
 	}
 
-	if (attr->cap.max_recv_wr > MAX_SEND_BUFFERS_PER_QUEUE) {
+	if (attr->cap.max_recv_wr >
+			mib_dev->adapter_caps.max_requester_sq_size) {
 		ibdev_dbg(&mib_dev->ib_dev,
 			  "Requested max_recv_wr %d exceeding limit\n",
 			  attr->cap.max_recv_wr);
@@ -302,7 +303,8 @@ static int mana_ib_create_qp_raw(struct ib_qp *ibqp, struct ib_pd *ibpd,
 	if (port < 1 || port > mc->num_ports)
 		return -EINVAL;
 
-	if (attr->cap.max_send_wr > MAX_SEND_BUFFERS_PER_QUEUE) {
+	if (attr->cap.max_send_wr >
+			mib_dev->adapter_caps.max_requester_sq_size) {
 		ibdev_dbg(&mib_dev->ib_dev,
 			  "Requested max_send_wr %d exceeding limit\n",
 			  attr->cap.max_send_wr);

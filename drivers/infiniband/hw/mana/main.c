@@ -624,9 +624,9 @@ static void assign_caps(struct mana_ib_adapter_caps *caps,
 	caps->max_responder_sq_size = resp->max_responder_sq_size;
 	caps->max_requester_rq_size = resp->max_requester_rq_size;
 	caps->max_responder_rq_size = resp->max_responder_rq_size;
-	caps->max_send_wqe_size = resp->max_send_wqe_size;
-	caps->max_recv_wqe_size = resp->max_recv_wqe_size;
 	caps->max_inline_data_size = resp->max_inline_data_size;
+	caps->max_send_wqe_size = MAX_TX_WQE_SGL_ENTRIES;
+	caps->max_recv_wqe_size = MAX_RX_WQE_SGL_ENTRIES;
 }
 
 int mana_ib_query_adapter_caps(struct mana_ib_dev *mib_dev)
