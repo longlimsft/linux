@@ -87,10 +87,23 @@ static int mana_ib_probe(struct auxiliary_device *adev,
 	}
 	dev->gdma_dev = &mdev->gdma_context->mana_ib;
 
+	xa_init(&dev->rq_to_qp_lookup_table);
+
+	ret = mana_ib_create_error_eq(dev);
 	if (ret) {
-		ib_dealloc_device(&dev->ib_dev);
-		return ret;
+		ibdev_err(&dev->ib_dev, "Failed to allocate err eq");
+		goto deregister_device;
 	}
+
+	ret = mana_ib_create_adapter(dev);
+	if (ret) {
+		ibdev_err(&dev->ib_dev, "Failed to create adapter");
+		goto free_error_eq;
+	}
+
+	ret = mana_ib_query_adapter_caps(dev);
+	if (ret)
+		ibdev_dbg(&dev->ib_dev, "Failed to get caps, use defaults");
 
 	ret = ib_register_device(&dev->ib_dev, "mana_%d",
 				 mdev->gdma_context->dev);
@@ -102,6 +115,11 @@ static int mana_ib_probe(struct auxiliary_device *adev,
 	return 0;
 
 destroy_adapter:
+	mana_ib_destroy_adapter(dev);
+	xa_destroy(&dev->rq_to_qp_lookup_table);
+free_error_eq:
+	mana_gd_destroy_queue(dev->gdma_dev->gdma_context, dev->fatal_err_eq);
+deregister_device:
 	mana_gd_deregister_device(dev->gdma_dev);
 free_ib_device:
 	ib_dealloc_device(&dev->ib_dev);
@@ -114,6 +132,9 @@ static void mana_ib_remove(struct auxiliary_device *adev)
 
 	ib_unregister_device(&dev->ib_dev);
 
+	mana_ib_destroy_adapter(dev);
+	mana_gd_destroy_queue(dev->gdma_dev->gdma_context, dev->fatal_err_eq);
+	xa_destroy(&dev->rq_to_qp_lookup_table);
 	mana_gd_deregister_device(dev->gdma_dev);
 
 	ib_dealloc_device(&dev->ib_dev);
