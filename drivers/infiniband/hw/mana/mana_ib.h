@@ -50,6 +50,7 @@ struct mana_ib_dev {
 	struct gdma_dev *gdma_dev;
 	struct mana_ib_adapter_caps adapter_caps;
 	struct gdma_queue *fatal_err_eq;
+	mana_handle_t adapter_handle;
 };
 
 struct mana_ib_wq {
@@ -114,6 +115,8 @@ struct mana_ib_rwq_ind_table {
 
 enum mana_ib_command_code {
 	MANA_IB_GET_ADAPTER_CAP = 0x30001,
+	MANA_IB_CREATE_ADAPTER  = 0x30002,
+	MANA_IB_DESTROY_ADAPTER = 0x30003,
 };
 
 struct mana_ib_query_adapter_caps_req {
@@ -140,6 +143,26 @@ struct mana_ib_query_adapter_caps_resp {
 	u32 max_send_sge_count;
 	u32 max_recv_sge_count;
 	u32 max_inline_data_size;
+};
+
+struct mana_ib_create_adapter_req {
+	struct gdma_req_hdr hdr;
+	u32 notify_eq_id;
+	u32 reserved;
+}; /*HW Data */
+
+struct mana_ib_create_adapter_resp {
+	struct gdma_resp_hdr hdr;
+	mana_handle_t adapter;
+}; /* HW Data */
+
+struct mana_ib_destroy_adapter_req {
+	struct gdma_req_hdr hdr;
+	mana_handle_t adapter;
+}; /*HW Data */
+
+struct mana_ib_destroy_adapter_resp {
+	struct gdma_resp_hdr hdr;
 }; /* HW Data */
 
 int mana_ib_gd_create_dma_region(struct mana_ib_dev *dev, struct ib_umem *umem,
@@ -212,5 +235,9 @@ void mana_ib_disassociate_ucontext(struct ib_ucontext *ibcontext);
 void mana_ib_set_default_caps(struct mana_ib_dev *mdev);
 int mana_ib_query_adapter_caps(struct mana_ib_dev *mdev);
 int mana_ib_create_error_eq(struct mana_ib_dev *mdev);
+
+int mana_ib_create_adapter(struct mana_ib_dev *mdev);
+
+int mana_ib_destroy_adapter(struct mana_ib_dev *mdev);
 
 #endif
