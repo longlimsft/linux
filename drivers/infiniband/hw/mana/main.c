@@ -573,3 +573,24 @@ int mana_ib_query_adapter_caps(struct mana_ib_dev *dev)
 
 	return 0;
 }
+
+int mana_ib_create_error_eq(struct mana_ib_dev *dev)
+{
+	struct gdma_queue_spec spec = {};
+	int err;
+
+	spec.type = GDMA_EQ;
+	spec.monitor_avl_buf = false;
+	spec.queue_size = EQ_SIZE;
+	spec.eq.callback = NULL;
+	spec.eq.context = dev;
+	spec.eq.log2_throttle_limit = LOG2_EQ_THROTTLE;
+	spec.eq.msix_index = 0;
+
+	err = mana_gd_create_mana_eq(dev->gdma_dev, &spec,
+				     &dev->fatal_err_eq);
+	if (err)
+		return err;
+
+	return 0;
+}

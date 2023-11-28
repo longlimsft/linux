@@ -49,6 +49,7 @@ struct mana_ib_dev {
 	struct ib_device ib_dev;
 	struct gdma_dev *gdma_dev;
 	struct mana_ib_adapter_caps adapter_caps;
+	struct gdma_queue *fatal_err_eq;
 };
 
 struct mana_ib_wq {
@@ -210,5 +211,6 @@ void mana_ib_disassociate_ucontext(struct ib_ucontext *ibcontext);
 
 void mana_ib_set_default_caps(struct mana_ib_dev *mdev);
 int mana_ib_query_adapter_caps(struct mana_ib_dev *mdev);
+int mana_ib_create_error_eq(struct mana_ib_dev *mdev);
 
 #endif

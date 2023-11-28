@@ -844,6 +844,7 @@ free_q:
 	kfree(queue);
 	return err;
 }
+EXPORT_SYMBOL_NS(mana_gd_create_mana_eq, NET_MANA);
 
 int mana_gd_create_mana_wq_cq(struct gdma_dev *gd,
 			      const struct gdma_queue_spec *spec,
@@ -920,6 +921,7 @@ void mana_gd_destroy_queue(struct gdma_context *gc, struct gdma_queue *queue)
 	mana_gd_free_memory(gmi);
 	kfree(queue);
 }
+EXPORT_SYMBOL_NS(mana_gd_destroy_queue, NET_MANA);
 
 int mana_gd_verify_vf_version(struct pci_dev *pdev)
 {

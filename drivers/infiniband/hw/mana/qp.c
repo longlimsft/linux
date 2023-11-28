@@ -388,6 +388,7 @@ static int mana_ib_create_qp_raw(struct ib_qp *ibqp, struct ib_pd *ibpd,
 		goto err_destroy_wq_obj;
 	}
 
+
 	return 0;
 
 err_destroy_wq_obj:

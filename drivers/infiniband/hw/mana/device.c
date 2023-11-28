@@ -90,6 +90,12 @@ static int mana_ib_probe(struct auxiliary_device *adev,
 	if (ret)
 		ibdev_warn(&dev->ib_dev, "Can not query device caps");
 
+	ret = mana_ib_create_error_eq(dev);
+	if (ret) {
+		ibdev_err(&dev->ib_dev, "Failed to allocate err eq");
+		goto deregister_device;
+	}
+
 	ret = ib_register_device(&dev->ib_dev, "mana_%d",
 				 mdev->gdma_context->dev);
 	if (ret)
@@ -100,6 +106,8 @@ static int mana_ib_probe(struct auxiliary_device *adev,
 	return 0;
 
 destroy_adapter:
+	mana_gd_destroy_queue(dev->gdma_dev->gdma_context, dev->fatal_err_eq);
+deregister_device:
 	mana_gd_deregister_device(dev->gdma_dev);
 free_ib_device:
 	ib_dealloc_device(&dev->ib_dev);
@@ -112,6 +120,7 @@ static void mana_ib_remove(struct auxiliary_device *adev)
 
 	ib_unregister_device(&dev->ib_dev);
 
+	mana_gd_destroy_queue(dev->gdma_dev->gdma_context, dev->fatal_err_eq);
 	mana_gd_deregister_device(dev->gdma_dev);
 
 	ib_dealloc_device(&dev->ib_dev);
