@@ -60,6 +60,11 @@ enum gdma_eqe_type {
 	GDMA_EQE_HWC_INIT_DONE		= 131,
 	GDMA_EQE_HWC_SOC_RECONFIG	= 132,
 	GDMA_EQE_HWC_SOC_RECONFIG_DATA	= 133,
+
+	/* RDMA SOC Events */
+	GDMA_EQE_SOC_EVENT_NOTIFICATION = 176,
+	GDMA_EQE_SOC_EVENT_TEST = 177,
+
 };
 
 enum {
@@ -322,6 +327,8 @@ struct gdma_queue_spec {
 	enum gdma_queue_type type;
 	bool monitor_avl_buf;
 	unsigned int queue_size;
+	u32 doorbell;
+	u32 pdid;
 
 	/* Extra fields specific to EQ/CQ. */
 	union {

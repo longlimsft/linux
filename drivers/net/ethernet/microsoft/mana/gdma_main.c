@@ -204,7 +204,8 @@ void mana_gd_free_memory(struct gdma_mem_info *gmi)
 }
 
 static int mana_gd_create_hw_eq(struct gdma_context *gc,
-				struct gdma_queue *queue)
+				struct gdma_queue *queue,
+				u32 doorbell, u32 pdid)
 {
 	struct gdma_create_queue_resp resp = {};
 	struct gdma_create_queue_req req = {};
@@ -218,8 +219,8 @@ static int mana_gd_create_hw_eq(struct gdma_context *gc,
 
 	req.hdr.dev_id = queue->gdma_dev->dev_id;
 	req.type = queue->type;
-	req.pdid = queue->gdma_dev->pdid;
-	req.doolbell_id = queue->gdma_dev->doorbell;
+	req.pdid = pdid;
+	req.doolbell_id = doorbell;
 	req.gdma_region = queue->mem_info.dma_region_handle;
 	req.queue_size = queue->queue_size;
 	req.log2_throttle_limit = queue->eq.log2_throttle_limit;
@@ -631,7 +632,8 @@ static int mana_gd_create_eq(struct gdma_dev *gd,
 	queue->eq.log2_throttle_limit = spec->eq.log2_throttle_limit ?: 1;
 
 	if (create_hwq) {
-		err = mana_gd_create_hw_eq(gc, queue);
+		err = mana_gd_create_hw_eq(gc, queue,
+					   spec->doorbell, spec->pdid);
 		if (err)
 			goto out;
 
@@ -841,6 +843,7 @@ free_q:
 	kfree(queue);
 	return err;
 }
+EXPORT_SYMBOL(mana_gd_create_mana_eq);
 
 int mana_gd_create_mana_wq_cq(struct gdma_dev *gd,
 			      const struct gdma_queue_spec *spec,
@@ -917,6 +920,7 @@ void mana_gd_destroy_queue(struct gdma_context *gc, struct gdma_queue *queue)
 	mana_gd_free_memory(gmi);
 	kfree(queue);
 }
+EXPORT_SYMBOL(mana_gd_destroy_queue);
 
 int mana_gd_verify_vf_version(struct pci_dev *pdev)
 {

@@ -1243,6 +1243,8 @@ static int mana_create_eq(struct mana_context *ac)
 	spec.eq.context = ac->eqs;
 	spec.eq.log2_throttle_limit = LOG2_EQ_THROTTLE;
 	spec.eq.msix_index = INVALID_PCI_MSIX_INDEX;
+	spec.doorbell = gd->doorbell;
+	spec.pdid = gd->pdid;
 
 	for (i = 0; i < gc->max_num_queues; i++) {
 		err = mana_gd_create_mana_eq(gd, &spec, &ac->eqs[i].eq);
