@@ -417,8 +417,13 @@ static void mana_gd_process_eq_events(void *arg)
 
 		old_bits = (eq->head / num_eqe - 1) & GDMA_EQE_OWNER_MASK;
 		/* No more entries */
-		if (owner_bits == old_bits)
+		if (owner_bits == old_bits) {
+			/* Return without ringing the doorbell on nothing */
+			if (i == 0)
+				return;
+
 			break;
+		}
 
 		new_bits = (eq->head / num_eqe) & GDMA_EQE_OWNER_MASK;
 		if (owner_bits != new_bits) {
@@ -460,42 +465,46 @@ static int mana_gd_register_irq(struct gdma_queue *queue,
 
 	spin_lock_irqsave(&r->lock, flags);
 
-	msi_index = find_first_zero_bit(r->map, r->size);
+	msi_index = queue->eq.msix_index;
+	if (msi_index == INVALID_PCI_MSIX_INDEX)
+		msi_index = find_first_zero_bit(r->map, r->size);
+
 	if (msi_index >= r->size || msi_index >= gc->num_msix_usable) {
 		err = -ENOSPC;
+		msi_index = INVALID_PCI_MSIX_INDEX;
 	} else {
 		bitmap_set(r->map, msi_index, 1);
-		queue->eq.msix_index = msi_index;
 	}
+
+	queue->eq.msix_index = msi_index;
 
 	spin_unlock_irqrestore(&r->lock, flags);
 
 	if (err) {
 		dev_err(dev, "Register IRQ err:%d, msi:%u rsize:%u, nMSI:%u",
 			err, msi_index, r->size, gc->num_msix_usable);
-
 		return err;
 	}
 
 	gic = &gc->irq_contexts[msi_index];
 
-	WARN_ON(gic->handler || gic->arg);
-
-	gic->arg = queue;
+	list_add_rcu(&queue->entry, &gic->eq_list);
 
 	gic->handler = mana_gd_process_eq_events;
 
 	return 0;
 }
 
-static void mana_gd_deregiser_irq(struct gdma_queue *queue)
+static void mana_gd_deregister_irq(struct gdma_queue *queue)
 {
 	struct gdma_dev *gd = queue->gdma_dev;
 	struct gdma_irq_context *gic;
 	struct gdma_context *gc;
 	struct gdma_resource *r;
 	unsigned int msix_index;
+	struct gdma_queue *eq;
 	unsigned long flags;
+	struct list_head *p;
 
 	gc = gd->gdma_context;
 	r = &gc->msix_resource;
@@ -505,14 +514,24 @@ static void mana_gd_deregiser_irq(struct gdma_queue *queue)
 	if (WARN_ON(msix_index >= gc->num_msix_usable))
 		return;
 
-	gic = &gc->irq_contexts[msix_index];
-	gic->handler = NULL;
-	gic->arg = NULL;
-
 	spin_lock_irqsave(&r->lock, flags);
-	bitmap_clear(r->map, msix_index, 1);
-	spin_unlock_irqrestore(&r->lock, flags);
 
+	gic = &gc->irq_contexts[msix_index];
+	list_for_each_rcu(p, &gic->eq_list) {
+		eq = list_entry(p, struct gdma_queue, entry);
+		if (queue == eq) {
+			list_del(&eq->entry);
+			synchronize_rcu();
+			break;
+		}
+	}
+
+	if (list_empty(&gic->eq_list)) {
+		gic->handler = NULL;
+		bitmap_clear(r->map, msix_index, 1);
+	}
+
+	spin_unlock_irqrestore(&r->lock, flags);
 	queue->eq.msix_index = INVALID_PCI_MSIX_INDEX;
 }
 
@@ -575,7 +594,7 @@ static void mana_gd_destroy_eq(struct gdma_context *gc, bool flush_evenets,
 			dev_warn(gc->dev, "Failed to flush EQ: %d\n", err);
 	}
 
-	mana_gd_deregiser_irq(queue);
+	mana_gd_deregister_irq(queue);
 
 	if (queue->eq.disable_needed)
 		mana_gd_disable_queue(queue);
@@ -590,7 +609,7 @@ static int mana_gd_create_eq(struct gdma_dev *gd,
 	u32 log2_num_entries;
 	int err;
 
-	queue->eq.msix_index = INVALID_PCI_MSIX_INDEX;
+	queue->eq.msix_index = spec->eq.msix_index;
 
 	log2_num_entries = ilog2(queue->queue_size / GDMA_EQE_SIZE);
 
@@ -1222,9 +1241,13 @@ int mana_gd_poll_cq(struct gdma_queue *cq, struct gdma_comp *comp, int num_cqe)
 static irqreturn_t mana_gd_intr(int irq, void *arg)
 {
 	struct gdma_irq_context *gic = arg;
+	struct list_head *eq_list = &gic->eq_list;
+	struct gdma_queue *eq;
 
-	if (gic->handler)
-		gic->handler(gic->arg);
+	if (gic->handler) {
+		list_for_each_entry_rcu(eq, eq_list, entry)
+			gic->handler(&gic->eq_list);
+	}
 
 	return IRQ_HANDLED;
 }
@@ -1277,7 +1300,7 @@ static int mana_gd_setup_irqs(struct pci_dev *pdev)
 	for (i = 0; i < nvec; i++) {
 		gic = &gc->irq_contexts[i];
 		gic->handler = NULL;
-		gic->arg = NULL;
+		INIT_LIST_HEAD(&gic->eq_list);
 
 		if (!i)
 			snprintf(gic->name, MANA_IRQ_NAME_SZ, "mana_hwc@pci:%s",
