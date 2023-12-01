@@ -51,6 +51,7 @@ struct mana_ib_dev {
 	struct mana_ib_adapter_caps adapter_caps;
 	struct gdma_queue *fatal_err_eq;
 	mana_handle_t adapter_handle;
+	struct mana_eq *raw_eqs;
 };
 
 struct mana_ib_wq {
@@ -88,6 +89,7 @@ struct mana_ib_cq {
 	int cqe;
 	u64 gdma_region;
 	u64 id;
+	u32 comp_vector;
 };
 
 struct mana_ib_qp {
@@ -239,5 +241,10 @@ int mana_ib_create_error_eq(struct mana_ib_dev *mdev);
 int mana_ib_create_adapter(struct mana_ib_dev *mdev);
 
 int mana_ib_destroy_adapter(struct mana_ib_dev *mdev);
+
+void mana_ib_cq_handler(void *ctx, struct gdma_queue *gdma_cq);
+
+void mana_ib_destroy_raw_eq(struct mana_ib_dev *mdev);
+int mana_ib_create_raw_eq(struct mana_ib_dev *mdev);
 
 #endif

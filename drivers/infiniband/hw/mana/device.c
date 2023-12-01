@@ -96,6 +96,13 @@ static int mana_ib_probe(struct auxiliary_device *adev,
 		goto deregister_device;
 	}
 
+
+	ret = mana_ib_create_raw_eq(dev);
+	if (ret) {
+		ibdev_dbg(&dev->ib_dev, "Failed to create eq, ret %d\n", ret);
+		goto deregister_device;
+	}
+
 	dev->adapter_handle = INVALID_MANA_HANDLE;
 	ret = mana_ib_create_adapter(dev);
 	if (ret) {
@@ -115,6 +122,7 @@ static int mana_ib_probe(struct auxiliary_device *adev,
 
 destroy_adapter:
 	mana_ib_destroy_adapter(dev);
+	mana_ib_destroy_raw_eq(dev);
 deregister_device:
 	mana_gd_deregister_device(dev->gdma_dev);
 free_ib_device:
@@ -128,6 +136,7 @@ static void mana_ib_remove(struct auxiliary_device *adev)
 
 	ib_unregister_device(&dev->ib_dev);
 
+	mana_ib_destroy_raw_eq(dev);
 	mana_ib_destroy_adapter(dev);
 	mana_gd_deregister_device(dev->gdma_dev);
 
