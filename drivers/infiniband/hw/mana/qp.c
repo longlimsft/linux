@@ -111,6 +111,7 @@ static int mana_ib_create_qp_rss(struct ib_qp *ibqp, struct ib_pd *pd,
 	unsigned int ind_tbl_size;
 	struct mana_context *mc;
 	struct net_device *ndev;
+	struct gdma_context *gc;
 	struct mana_ib_cq *cq;
 	struct mana_ib_wq *wq;
 	struct gdma_dev *gd;
@@ -121,7 +122,8 @@ static int mana_ib_create_qp_rss(struct ib_qp *ibqp, struct ib_pd *pd,
 	u32 port;
 	int ret;
 
-	gd = &mdev->gdma_dev->gdma_context->mana;
+	gc = mdev->gdma_dev->gdma_context;
+	gd = &gc->mana;
 	mc = gd->driver_data;
 	mana_ucontext =
 		container_of(ib_ucontext, struct mana_ib_ucontext, ibucontext);
@@ -196,7 +198,6 @@ static int mana_ib_create_qp_rss(struct ib_qp *ibqp, struct ib_pd *pd,
 	qp->port = port;
 
 	for (i = 0; i < ind_tbl_size; i++) {
-		unsigned int max_num_queues = gd->gdma_context->max_num_queues;
 		struct mana_obj_spec wq_spec = {};
 		struct mana_obj_spec cq_spec = {};
 
@@ -212,7 +213,8 @@ static int mana_ib_create_qp_rss(struct ib_qp *ibqp, struct ib_pd *pd,
 		cq_spec.gdma_region = cq->gdma_region;
 		cq_spec.queue_size = cq->cqe * COMP_ENTRY_SIZE;
 		cq_spec.modr_ctx_id = 0;
-		eq = &mdev->raw_eqs[cq->comp_vector % max_num_queues];
+		eq = &mc->eqs[cq->comp_vector % gc->max_num_queues];
+//		eq = &mdev->raw_eqs[cq->comp_vector % max_num_queues];
 		cq_spec.attached_eq = eq->eq->id;
 
 		ret = mana_create_wq_obj(mpc, mpc->port_handle, GDMA_RQ,
@@ -236,7 +238,7 @@ static int mana_ib_create_qp_rss(struct ib_qp *ibqp, struct ib_pd *pd,
 
 		mana_ind_table[i] = wq->rx_object;
 
-		if (gd->gdma_context->cq_table[cq->id] == NULL) {
+		if (gc->cq_table[cq->id] == NULL) {
 			gdma_cq = kzalloc(sizeof(*gdma_cq), GFP_KERNEL);
 			if (!gdma_cq) {
 				ret = -ENOMEM;
@@ -248,7 +250,7 @@ static int mana_ib_create_qp_rss(struct ib_qp *ibqp, struct ib_pd *pd,
 			gdma_cq->type = GDMA_CQ;
 			gdma_cq->cq.callback = mana_ib_cq_handler;
 			gdma_cq->id = cq->id;
-			gd->gdma_context->cq_table[cq->id] = gdma_cq;
+			gc->cq_table[cq->id] = gdma_cq;
 		}
 	}
 	resp.num_entries = i;
@@ -281,7 +283,7 @@ fail:
 		mana_destroy_wq_obj(mpc, GDMA_RQ, wq->rx_object);
 
 		if (gdma_cq_allocated[i]) {
-			gd->gdma_context->cq_table[gdma_cq_allocated[i]->id] =
+			gc->cq_table[gdma_cq_allocated[i]->id] =
 				NULL;
 			kfree(gdma_cq_allocated[i]);
 		}
@@ -397,7 +399,8 @@ static int mana_ib_create_qp_raw(struct ib_qp *ibqp, struct ib_pd *ibpd,
 	cq_spec.queue_size = send_cq->cqe * COMP_ENTRY_SIZE;
 	cq_spec.modr_ctx_id = 0;
 	eq_vec = send_cq->comp_vector % gd->gdma_context->max_num_queues;
-	eq = &mdev->raw_eqs[eq_vec];
+//	eq = &mdev->raw_eqs[eq_vec];
+	eq = &mc->eqs[eq_vec];
 	cq_spec.attached_eq = eq->eq->id;
 
 	err = mana_create_wq_obj(mpc, mpc->port_handle, GDMA_SQ, &wq_spec,

@@ -104,5 +104,6 @@ void mana_ib_cq_handler(void *ctx, struct gdma_queue *gdma_cq)
 {
 	struct mana_ib_cq *cq = ctx;
 
-	cq->ibcq.comp_handler(&cq->ibcq, cq->ibcq.cq_context);
+	if (cq->ibcq.comp_handler)
+		cq->ibcq.comp_handler(&cq->ibcq, cq->ibcq.cq_context);
 }
