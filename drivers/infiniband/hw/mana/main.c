@@ -498,6 +498,8 @@ int mana_ib_query_device(struct ib_device *ibdev, struct ib_device_attr *props,
 	props->max_send_sge = dev->adapter_caps.max_send_sge_count;
 	props->max_recv_sge = dev->adapter_caps.max_recv_sge_count;
 
+	printk(KERN_ERR "LL %s: max_qp %d max_qp_wr %d max_cq %d max_cqe %d max_mr %d max_mr_size %llu max_send_sge %d max_recv_sge %d\n", __func__, props->max_qp, props->max_qp_wr, props->max_cq, props->max_cqe, props->max_mr, props->max_mr_size, props->max_send_sge, props->max_recv_sge);
+
 	return 0;
 }
 
