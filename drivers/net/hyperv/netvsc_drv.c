@@ -2483,7 +2483,11 @@ static int netvsc_unregister_vf(struct net_device *vf_netdev)
 
 	reinit_completion(&net_device_ctx->vf_add);
 	netdev_rx_handler_unregister(vf_netdev);
+
+	/* Unlink the slave device and clear flag */
 	netdev_upper_dev_unlink(vf_netdev, ndev);
+	dev_change_flags(vf_netdev, vf_netdev->flags & ~IFF_SLAVE, NULL);
+
 	RCU_INIT_POINTER(net_device_ctx->vf_netdev, NULL);
 	dev_put(vf_netdev);
 
