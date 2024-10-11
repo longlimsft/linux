@@ -51,6 +51,35 @@ static const struct ib_device_ops mana_ib_dev_ops = {
 			   ib_ind_table),
 };
 
+static int mana_ib_upper_netdev(struct mana_ib_dev *dev, struct net_device *netdev)
+{
+	struct net_device *ndev;
+	struct gdma_context *gc = dev->gdma_dev->gdma_context;
+	struct mana_context *mc = gc->mana.driver_data;
+
+	rcu_read_lock();
+	ndev = mana_get_primary_netdev_rcu(mc, 0);
+	rcu_read_unlock();
+
+	ib_device_set_netdev(&dev->ib_dev, ndev, 1);
+	return NOTIFY_OK;
+}
+
+static int mana_ib_netdev_event(struct notifier_block *this,
+				unsigned long event, void *ptr)
+{
+	struct mana_ib_dev *dev = container_of(this, struct mana_ib_dev, nb);
+	struct net_device *event_dev = netdev_notifier_info_to_dev(ptr);
+
+	switch (event) {
+	case NETDEV_CHANGEUPPER:
+	case NETDEV_JOIN:
+		return mana_ib_upper_netdev(dev, event_dev);
+	default:
+		return NOTIFY_DONE;
+	}
+}
+
 static int mana_ib_probe(struct auxiliary_device *adev,
 			 const struct auxiliary_device_id *id)
 {
@@ -109,6 +138,14 @@ static int mana_ib_probe(struct auxiliary_device *adev,
 	}
 	dev->gdma_dev = &mdev->gdma_context->mana_ib;
 
+	dev->nb.notifier_call = mana_ib_netdev_event;
+	ret = register_netdevice_notifier(&dev->nb);
+	if (ret) {
+		ibdev_err(&dev->ib_dev, "Failed to register notifier, ret %d",
+			  ret);
+		goto deregister_device;
+	}
+
 	ret = mana_ib_gd_query_adapter_caps(dev);
 	if (ret) {
 		ibdev_err(&dev->ib_dev, "Failed to query device caps, ret %d",
@@ -149,6 +186,7 @@ destroy_rnic:
 destroy_eqs:
 	mana_ib_destroy_eqs(dev);
 deregister_device:
+	unregister_netdevice_notifier(&dev->nb);
 	mana_gd_deregister_device(dev->gdma_dev);
 free_ib_device:
 	ib_dealloc_device(&dev->ib_dev);
@@ -159,6 +197,7 @@ static void mana_ib_remove(struct auxiliary_device *adev)
 {
 	struct mana_ib_dev *dev = dev_get_drvdata(&adev->dev);
 
+	unregister_netdevice_notifier(&dev->nb);
 	ib_unregister_device(&dev->ib_dev);
 	xa_destroy(&dev->qp_table_wq);
 	mana_ib_gd_destroy_rnic_adapter(dev);
