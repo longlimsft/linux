@@ -1048,6 +1048,9 @@ int vmbus_sendpacket_getid(struct vmbus_channel *channel, void *buffer,
 	bufferlist[2].iov_base = &aligned_data;
 	bufferlist[2].iov_len = (packetlen_aligned - packetlen);
 
+	if (guid_equal(&channel->offermsg.offer.if_type, &vmbus_devs[1].guid))
+		trace_printk("desc instanceid %pUb type %d flags %d dataoffset8 %d length8 %d\n", &channel->offermsg.offer.if_instance, desc.type, desc.flags, desc.offset8, desc.len8);
+
 	return hv_ringbuffer_write(channel, bufferlist, num_vecs, requestid, trans_id);
 }
 EXPORT_SYMBOL(vmbus_sendpacket_getid);
@@ -1168,6 +1171,9 @@ int vmbus_sendpacket_mpb_desc(struct vmbus_channel *channel,
 	bufferlist[1].iov_len = bufferlen;
 	bufferlist[2].iov_base = &aligned_data;
 	bufferlist[2].iov_len = (packetlen_aligned - packetlen);
+
+	if (guid_equal(&channel->offermsg.offer.if_type, &vmbus_devs[1].guid))
+		trace_printk("desc instanceid %pUb type %d flags %d dataoffset8 %d length8 %d rangecount %d\n", &channel->offermsg.offer.if_instance, desc->type, desc->flags, desc->dataoffset8, desc->length8, desc->rangecount);
 
 	return hv_ringbuffer_write(channel, bufferlist, 3, requestid, NULL);
 }

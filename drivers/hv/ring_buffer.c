@@ -365,6 +365,9 @@ int hv_ringbuffer_write(struct vmbus_channel *channel,
 	/* Issue a full memory barrier before updating the write index */
 	virt_mb();
 
+	if (guid_equal(&channel->offermsg.offer.if_type, &vmbus_devs[1].guid))
+		trace_printk("channel id %d transactionid %llu prev_index %llu next_write_location %d\n", channel->offermsg.child_relid, desc->trans_id, prev_indices >> 32, next_write_location);
+
 	/* Now, update the write location */
 	hv_set_next_write_location(outring_info, next_write_location);
 
