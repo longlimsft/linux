@@ -100,28 +100,28 @@ void *hv_alloc_hyperv_page(void)
 {
 	BUILD_BUG_ON(PAGE_SIZE <  HV_HYP_PAGE_SIZE);
 
-	if (PAGE_SIZE == HV_HYP_PAGE_SIZE)
+//	if (PAGE_SIZE == HV_HYP_PAGE_SIZE)
 		return (void *)__get_free_page(GFP_KERNEL);
-	else
-		return kmalloc(HV_HYP_PAGE_SIZE, GFP_KERNEL);
+//	else
+//		return kmalloc(HV_HYP_PAGE_SIZE, GFP_KERNEL);
 }
 EXPORT_SYMBOL_GPL(hv_alloc_hyperv_page);
 
 void *hv_alloc_hyperv_zeroed_page(void)
 {
-	if (PAGE_SIZE == HV_HYP_PAGE_SIZE)
+//	if (PAGE_SIZE == HV_HYP_PAGE_SIZE)
 		return (void *)__get_free_page(GFP_KERNEL | __GFP_ZERO);
-	else
-		return kzalloc(HV_HYP_PAGE_SIZE, GFP_KERNEL);
+//	else
+//		return kzalloc(HV_HYP_PAGE_SIZE, GFP_KERNEL);
 }
 EXPORT_SYMBOL_GPL(hv_alloc_hyperv_zeroed_page);
 
 void hv_free_hyperv_page(void *addr)
 {
-	if (PAGE_SIZE == HV_HYP_PAGE_SIZE)
+//	if (PAGE_SIZE == HV_HYP_PAGE_SIZE)
 		free_page((unsigned long)addr);
-	else
-		kfree(addr);
+//	else
+//		kfree(addr);
 }
 EXPORT_SYMBOL_GPL(hv_free_hyperv_page);
 

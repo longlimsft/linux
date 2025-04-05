@@ -36,7 +36,7 @@
 #define DRIVER_AUTHOR	"Stephen Hemminger <sthemmin at microsoft.com>"
 #define DRIVER_DESC	"Generic UIO driver for VMBus devices"
 
-#define HV_RING_SIZE	 512	/* pages */
+#define HV_RING_SIZE	(128 * 1024)
 #define SEND_BUFFER_SIZE (16 * 1024 * 1024)
 #define RECV_BUFFER_SIZE (31 * 1024 * 1024)
 
@@ -152,7 +152,7 @@ static const struct bin_attribute ring_buffer_bin_attr = {
 		.name = "ring",
 		.mode = 0600,
 	},
-	.size = 2 * HV_RING_SIZE * PAGE_SIZE,
+	.size = HV_RING_SIZE * 2,
 	.mmap = hv_uio_ring_mmap,
 };
 
@@ -162,7 +162,7 @@ hv_uio_new_channel(struct vmbus_channel *new_sc)
 {
 	struct hv_device *hv_dev = new_sc->primary_channel->device_obj;
 	struct device *device = &hv_dev->device;
-	const size_t ring_bytes = HV_RING_SIZE * PAGE_SIZE;
+	const size_t ring_bytes = HV_RING_SIZE;
 	int ret;
 
 	/* Create host communication ring */
@@ -260,8 +260,7 @@ hv_uio_probe(struct hv_device *dev,
 	if (!pdata)
 		return -ENOMEM;
 
-	ret = vmbus_alloc_ring(channel, HV_RING_SIZE * PAGE_SIZE,
-			       HV_RING_SIZE * PAGE_SIZE);
+	ret = vmbus_alloc_ring(channel, HV_RING_SIZE, HV_RING_SIZE);
 	if (ret)
 		return ret;
 
@@ -281,6 +280,7 @@ hv_uio_probe(struct hv_device *dev,
 	ring_buffer = page_address(channel->ringbuffer_page);
 	pdata->info.mem[TXRX_RING_MAP].addr
 		= (uintptr_t)virt_to_phys(ring_buffer);
+	printk(KERN_ERR "%s: txrx_rings phy %llx\n", __func__, pdata->info.mem[TXRX_RING_MAP].addr);
 	pdata->info.mem[TXRX_RING_MAP].size
 		= channel->ringbuffer_pagecount << PAGE_SHIFT;
 	pdata->info.mem[TXRX_RING_MAP].memtype = UIO_MEM_IOVA;
@@ -288,13 +288,15 @@ hv_uio_probe(struct hv_device *dev,
 	pdata->info.mem[INT_PAGE_MAP].name = "int_page";
 	pdata->info.mem[INT_PAGE_MAP].addr
 		= (uintptr_t)vmbus_connection.int_page;
-	pdata->info.mem[INT_PAGE_MAP].size = PAGE_SIZE;
+	printk(KERN_ERR "%s: INT_PAGE_MAP phy %llx\n", __func__, virt_to_phys(vmbus_connection.int_page));
+	pdata->info.mem[INT_PAGE_MAP].size = HV_HYP_PAGE_SIZE;
 	pdata->info.mem[INT_PAGE_MAP].memtype = UIO_MEM_LOGICAL;
 
 	pdata->info.mem[MON_PAGE_MAP].name = "monitor_page";
 	pdata->info.mem[MON_PAGE_MAP].addr
 		= (uintptr_t)vmbus_connection.monitor_pages[1];
-	pdata->info.mem[MON_PAGE_MAP].size = PAGE_SIZE;
+	printk(KERN_ERR "%s: MON_PAGE_MAP phy %llx\n", __func__, virt_to_phys(vmbus_connection.monitor_pages[1]));
+	pdata->info.mem[MON_PAGE_MAP].size = HV_HYP_PAGE_SIZE;
 	pdata->info.mem[MON_PAGE_MAP].memtype = UIO_MEM_LOGICAL;
 
 	pdata->recv_buf = vzalloc(RECV_BUFFER_SIZE);
@@ -317,6 +319,7 @@ hv_uio_probe(struct hv_device *dev,
 	pdata->info.mem[RECV_BUF_MAP].name = pdata->recv_name;
 	pdata->info.mem[RECV_BUF_MAP].addr
 		= (uintptr_t)pdata->recv_buf;
+	printk(KERN_ERR "%s: RECV_BUF_MAP phy %llx\n", __func__, virt_to_phys(pdata->recv_buf));
 	pdata->info.mem[RECV_BUF_MAP].size = RECV_BUFFER_SIZE;
 	pdata->info.mem[RECV_BUF_MAP].memtype = UIO_MEM_VIRTUAL;
 
@@ -339,6 +342,7 @@ hv_uio_probe(struct hv_device *dev,
 	pdata->info.mem[SEND_BUF_MAP].name = pdata->send_name;
 	pdata->info.mem[SEND_BUF_MAP].addr
 		= (uintptr_t)pdata->send_buf;
+	printk(KERN_ERR "%s: SEND_BUF_MAP phy %llx\n", __func__, virt_to_phys(pdata->send_buf));
 	pdata->info.mem[SEND_BUF_MAP].size = SEND_BUFFER_SIZE;
 	pdata->info.mem[SEND_BUF_MAP].memtype = UIO_MEM_VIRTUAL;
 

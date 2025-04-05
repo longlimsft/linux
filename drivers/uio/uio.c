@@ -701,8 +701,11 @@ static vm_fault_t uio_vma_fault(struct vm_fault *vmf)
 	get_page(page);
 	vmf->page = page;
 
+	printk(KERN_ERR "%s: mi %d virt %p phys %llx\n", __func__, mi, addr, page_to_phys(page));
 out:
 	mutex_unlock(&idev->info_lock);
+
+	printk(KERN_ERR "%s: mi %d\n", __func__, mi);
 
 	return ret;
 }
