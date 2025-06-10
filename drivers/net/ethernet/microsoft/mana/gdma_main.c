@@ -71,6 +71,7 @@ static int mana_gd_query_max_resources(struct pci_dev *pdev)
 	struct gdma_query_max_resources_resp resp = {};
 	struct gdma_general_req req = {};
 	int err;
+	u16 num_ports = 0;
 
 	mana_gd_init_req_hdr(&req.hdr, GDMA_QUERY_MAX_RESOURCES,
 			     sizeof(req), sizeof(resp));
@@ -114,6 +115,14 @@ static int mana_gd_query_max_resources(struct pci_dev *pdev)
 	/* The Hardware Channel (HWC) used 1 MSI-X */
 	if (gc->max_num_queues > gc->num_msix_usable - 1)
 		gc->max_num_queues = gc->num_msix_usable - 1;
+
+	gdma_mana_query_device_cfg(gc, MANA_MAJOR_VERSION, MANA_MINOR_VERSION,
+				   MANA_MICRO_VERSION, &num_ports);
+
+	if (gc->max_num_queues * num_ports > gc->num_msix_usable - 1)
+		gc->msi_sharing = true;
+
+	printk(KERN_ERR "%s: num_msix_usable %d max_num_queues %d num_ports %d\n", __func__, gc->num_msix_usable, gc->max_num_queues, num_ports);
 
 	return 0;
 }
@@ -1570,6 +1579,7 @@ static int mana_gd_setup_hwc_irqs(struct pci_dev *pdev)
 		/* Need 1 interrupt for HWC */
 		max_irqs = min(num_online_cpus(), MANA_MAX_NUM_QUEUES) + 1;
 		min_irqs = 2;
+		gc->msi_sharing = true;
 	}
 
 	nvec = pci_alloc_irq_vectors(pdev, min_irqs, max_irqs, PCI_IRQ_MSIX);
@@ -1675,19 +1685,21 @@ static int mana_gd_setup(struct pci_dev *pdev)
 	if (err)
 		goto destroy_hwc;
 
+	err = mana_gd_detect_devices(pdev);
+	if (err)
+		goto destroy_hwc;
+
 	err = mana_gd_query_max_resources(pdev);
 	if (err)
 		goto destroy_hwc;
 
-	err = mana_gd_setup_remaining_irqs(pdev);
-	if (err) {
-		dev_err(gc->dev, "Failed to setup remaining IRQs: %d", err);
-		goto destroy_hwc;
+	if (gc->msi_sharing) {
+		err = mana_gd_setup_remaining_irqs(pdev);
+		if (err) {
+			dev_err(gc->dev, "Failed to setup remaining IRQs: %d", err);
+			goto destroy_hwc;
+		}
 	}
-
-	err = mana_gd_detect_devices(pdev);
-	if (err)
-		goto destroy_hwc;
 
 	dev_dbg(&pdev->dev, "mana gdma setup successful\n");
 	return 0;

@@ -409,6 +409,8 @@ struct gdma_context {
 	struct gdma_dev		mana_ib;
 
 	u64 pf_cap_flags1;
+
+	bool msi_sharing;
 };
 
 static inline bool mana_gd_is_mana(struct gdma_dev *gd)
@@ -895,4 +897,10 @@ int mana_gd_destroy_dma_region(struct gdma_context *gc, u64 dma_region_handle);
 void mana_register_debugfs(void);
 void mana_unregister_debugfs(void);
 
+int gdma_mana_query_device_cfg(struct gdma_context *gc, u32 proto_major_ver,
+                               u32 proto_minor_ver, u32 proto_micro_ver,
+ 			       u16 *max_num_vports);
+
+int gdma_mana_query_vport_cfg(struct gdma_context *gc, u32 vport_index,
+                              u32 *max_sq, u32 *max_rq);
 #endif /* _GDMA_H */
