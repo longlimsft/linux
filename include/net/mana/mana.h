@@ -832,4 +832,5 @@ void mana_destroy_eq(struct mana_port_context *apc);
 struct net_device *mana_get_primary_netdev(struct mana_context *ac,
 					   u32 port_index,
 					   netdevice_tracker *tracker);
+
 #endif /* _MANA_H */

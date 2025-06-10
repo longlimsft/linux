@@ -6,6 +6,7 @@
 
 #include <linux/dma-mapping.h>
 #include <linux/netdevice.h>
+#include <linux/msi.h>
 
 #include "shm_channel.h"
 
@@ -317,6 +318,7 @@ struct gdma_queue {
 			void *context;
 
 			unsigned int msix_index;
+			unsigned int irq;
 
 			u32 log2_throttle_limit;
 		} eq;
@@ -343,6 +345,7 @@ struct gdma_queue_spec {
 
 			unsigned long log2_throttle_limit;
 			unsigned int msix_index;
+			unsigned int irq;
 		} eq;
 
 		struct {
@@ -363,6 +366,9 @@ struct gdma_irq_context {
 	spinlock_t lock;
 	struct list_head eq_list;
 	char name[MANA_IRQ_NAME_SZ];
+	unsigned int msi;
+	unsigned int irq;
+	refcount_t refcount;
 };
 
 struct gdma_context {
@@ -407,6 +413,9 @@ struct gdma_context {
 
 	/* Azure RDMA adapter */
 	struct gdma_dev		mana_ib;
+
+	bool msi_sharing;
+	unsigned long *msi_bitmap;
 };
 
 static inline bool mana_gd_is_mana(struct gdma_dev *gd)
@@ -897,4 +906,21 @@ int mana_gd_destroy_dma_region(struct gdma_context *gc, u64 dma_region_handle);
 void mana_register_debugfs(void);
 void mana_unregister_debugfs(void);
 
+int gdma_mana_query_device_cfg(struct gdma_context *gc, u32 proto_major_ver,
+                               u32 proto_minor_ver, u32 proto_micro_ver,
+ 			       u16 *max_num_vports);
+
+int gdma_mana_query_vport_cfg(struct gdma_context *gc, u32 vport_index,
+                              u32 *max_sq, u32 *max_rq);
+
+void mana_gd_process_eq_events(void *arg);
+irqreturn_t mana_gd_intr(int irq, void *arg);
+
+struct gdma_irq_context* gdma_get_gic(struct gdma_context *gc, bool use_bitmap, u16 port_index, int queue_index, int *msi_requested);
+void gdma_put_gic(struct gdma_context *gc, bool use_bitmap, int msi);
+int mana_gd_query_device_cfg(struct gdma_context *gc, u32 proto_major_ver,
+                               u32 proto_minor_ver, u32 proto_micro_ver,
+                               u16 *max_num_vports);
+int gdma_mana_send_request(struct gdma_context *gc, void *in_buf,
+                                  u32 in_len, void *out_buf, u32 out_len);
 #endif /* _GDMA_H */
