@@ -1346,7 +1346,37 @@ int mana_create_eq(struct mana_port_context *apc)
 	apc->mana_eqs_debugfs = debugfs_create_dir("EQs", apc->mana_port_debugfs);
 
 	for (i = 0; i < apc->num_queues; i++) {
-		spec.eq.msix_index = (i + 1) % gc->num_msix_usable;
+		if (gc->msi_sharing)
+			spec.eq.msix_index = (i + 1) % gc->num_msix_usable;
+		else {
+			int msi;
+			struct pci_dev *dev = to_pci_dev(gc->dev);
+			struct msi_map irq_map;
+			int irq;
+			struct gdma_irq_context *gic;
+
+			msi = find_first_zero_bit(gc->msi_bitmap, gc->num_msix_usable);
+			irq_map = pci_msix_alloc_irq_at(dev, msi, NULL);
+			if (!irq_map.virq) {
+				err = irq_map.index;
+				goto out;
+			}
+
+			gic = kzalloc(sizeof(*gic), GFP_KERNEL);
+			gic->handler = mana_gd_process_eq_events;
+			INIT_LIST_HEAD(&gic->eq_list);
+			spin_lock_init(&gic->lock);
+	                snprintf(gic->name, MANA_IRQ_NAME_SZ, "mana_p%dq%d@pci:%s", apc->port_idx, msi, pci_name(dev));
+
+			irq = pci_irq_vector(dev, msi);
+			request_irq(irq, mana_gd_intr, 0, gic->name, gic);
+
+			xa_store(&gc->irq_contexts, msi, gic, GFP_KERNEL);
+
+			/* TODO need a lock for msi_bitmap */
+			set_bit(spec.eq.msix_index, gc->msi_bitmap);
+		}
+
 		err = mana_gd_create_mana_eq(gd, &spec, &apc->eqs[i].eq);
 		if (err) {
 			dev_err(gc->dev, "Failed to create EQ %d : %d\n", i, err);

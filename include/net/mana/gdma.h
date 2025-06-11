@@ -409,6 +409,7 @@ struct gdma_context {
 	struct gdma_dev		mana_ib;
 
 	bool msi_sharing;
+	unsigned long *msi_bitmap;
 };
 
 static inline bool mana_gd_is_mana(struct gdma_dev *gd)
@@ -905,4 +906,7 @@ int gdma_mana_query_device_cfg(struct gdma_context *gc, u32 proto_major_ver,
 
 int gdma_mana_query_vport_cfg(struct gdma_context *gc, u32 vport_index,
                               u32 *max_sq, u32 *max_rq);
+
+void mana_gd_process_eq_events(void *arg);
+irqreturn_t mana_gd_intr(int irq, void *arg);
 #endif /* _GDMA_H */

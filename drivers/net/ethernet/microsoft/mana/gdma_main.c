@@ -423,7 +423,7 @@ static void mana_gd_process_eqe(struct gdma_queue *eq)
 	}
 }
 
-static void mana_gd_process_eq_events(void *arg)
+void mana_gd_process_eq_events(void *arg)
 {
 	u32 owner_bits, new_bits, old_bits;
 	union gdma_eqe_info eqe_info;
@@ -1277,7 +1277,7 @@ int mana_gd_poll_cq(struct gdma_queue *cq, struct gdma_comp *comp, int num_cqe)
 }
 EXPORT_SYMBOL_NS(mana_gd_poll_cq, "NET_MANA");
 
-static irqreturn_t mana_gd_intr(int irq, void *arg)
+irqreturn_t mana_gd_intr(int irq, void *arg)
 {
 	struct gdma_irq_context *gic = arg;
 	struct list_head *eq_list = &gic->eq_list;
@@ -1692,7 +1692,15 @@ static int mana_gd_setup(struct pci_dev *pdev)
 	if (err)
 		goto destroy_hwc;
 
-	if (gc->msi_sharing) {
+	if (!gc->msi_sharing) {
+		gc->msi_bitmap = bitmap_zalloc(gc->num_msix_usable, GFP_KERNEL);
+		if (!gc->msi_bitmap) {
+			err = -ENOMEM;
+			goto destroy_hwc;
+		}
+		// Set bit for HWC
+		set_bit(1, gc->msi_bitmap);
+	} else {
 		err = mana_gd_setup_remaining_irqs(pdev);
 		if (err) {
 			dev_err(gc->dev, "Failed to setup remaining IRQs: %d", err);
