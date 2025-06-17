@@ -1303,6 +1303,34 @@ void mana_destroy_eq(struct mana_port_context *apc)
 			continue;
 
 		mana_gd_destroy_queue(gc, eq);
+
+		if (!gc->msi_sharing) {
+			struct pci_dev *dev = to_pci_dev(gc->dev);
+			int msi = eq->eq.msix_index;
+			struct msi_map irq_map = eq->eq.irq_map;
+			struct gdma_irq_context *gic;
+			int irq;
+
+			gic = xa_load(&gc->irq_contexts, msi);
+			if (!refcount_dec_and_test(&gic->refcount))
+				goto clear_bitmap;
+
+			irq = pci_irq_vector(dev, msi);
+			gic = xa_load(&gc->irq_contexts, msi);
+			if (WARN_ON(!gic))
+				continue;
+
+			printk(KERN_ERR "%s: removing irq %d msi %d\n", __func__, irq, msi);
+
+			irq_update_affinity_hint(irq, NULL);
+			free_irq(irq, gic);
+			pci_msix_free_irq(dev, irq_map);
+			xa_erase(&gc->irq_contexts, msi);
+			kfree(gic);
+
+clear_bitmap:
+			clear_bit(msi, gc->msi_bitmap);
+		}
 	}
 
 	kfree(apc->eqs);
@@ -1319,8 +1347,71 @@ static void mana_create_eq_debugfs(struct mana_port_context *apc, int i)
 	eq.mana_eq_debugfs = debugfs_create_dir(eqnum, apc->mana_eqs_debugfs);
 	debugfs_create_u32("head", 0400, eq.mana_eq_debugfs, &eq.eq->head);
 	debugfs_create_u32("tail", 0400, eq.mana_eq_debugfs, &eq.eq->tail);
+	debugfs_create_u32("irq", 0400, eq.mana_eq_debugfs, &eq.eq->eq.irq_map.virq);
 	debugfs_create_file("eq_dump", 0400, eq.mana_eq_debugfs, eq.eq, &mana_dbg_q_fops);
 }
+
+struct gdma_irq_context* mana_get_gic(struct gdma_context *gc, bool use_bitmap, u16 port_index, int queue_index, int *msi_requested)
+{
+	struct gdma_irq_context *gic;
+	struct pci_dev *dev = to_pci_dev(gc->dev);
+	struct msi_map irq_map;
+	int irq;
+	int msi;
+	int err;
+
+	/*
+	gic = xa_load(&gc->irq_contexts, msi);
+	if (!gic)
+		setup_interrupts before calling mana_gd_create_mana_eq()
+		also need to call irq_setup() to get affinity right
+	*/
+
+	if (use_bitmap) {
+		msi = find_first_zero_bit(gc->msi_bitmap, gc->num_msix_usable);
+		*msi_requested = msi;
+	} else
+		msi = *msi_requested;
+
+	gic = xa_load(&gc->irq_contexts, msi);
+	if (gic) {
+		refcount_inc(&gic->refcount);
+		if (use_bitmap)
+			set_bit(msi, gc->msi_bitmap);
+		return gic;
+	}
+
+	irq_map = pci_msix_alloc_irq_at(dev, msi, NULL);
+	if (!irq_map.virq) {
+		err = irq_map.index;
+		dev_err(gc->dev, "Failed to alloc irq_map msi %d err %d\n", msi, err);
+		return NULL;
+	}
+	printk(KERN_ERR "%s: msi allocated index %d irq %d\n", __func__, irq_map.index, irq_map.virq);
+	gic = kzalloc(sizeof(*gic), GFP_KERNEL);
+	gic->handler = mana_gd_process_eq_events;
+	gic->irq_map = irq_map;
+	INIT_LIST_HEAD(&gic->eq_list);
+	spin_lock_init(&gic->lock);
+	snprintf(gic->name, MANA_IRQ_NAME_SZ, "mana_p%dq%d@pci:%s", port_index, queue_index, pci_name(dev));
+
+	irq = pci_irq_vector(dev, msi);
+	err = request_irq(irq, mana_gd_intr, 0, gic->name, gic);
+	if (err) {
+		dev_err(gc->dev, "Failed to request irq %d %s\n", irq, gic->name);
+		return NULL;
+	}
+
+	refcount_set(&gic->refcount, 1);
+	printk(KERN_ERR "%s: gic %px refcount %d\n", __func__, gic, refcount_read(&gic->refcount));
+	xa_store(&gc->irq_contexts, msi, gic, GFP_KERNEL);
+
+	if (use_bitmap)
+		set_bit(msi, gc->msi_bitmap);
+
+	return gic;
+}
+EXPORT_SYMBOL_NS(mana_get_gic, "NET_MANA");
 
 int mana_create_eq(struct mana_port_context *apc)
 {
@@ -1329,6 +1420,7 @@ int mana_create_eq(struct mana_port_context *apc)
 	struct gdma_queue_spec spec = {};
 	int err;
 	int i;
+	struct gdma_irq_context *gic;
 
 	BUG_ON(apc->eqs);
 	apc->eqs = kcalloc(apc->num_queues, sizeof(struct mana_eq),
@@ -1346,35 +1438,19 @@ int mana_create_eq(struct mana_port_context *apc)
 	apc->mana_eqs_debugfs = debugfs_create_dir("EQs", apc->mana_port_debugfs);
 
 	for (i = 0; i < apc->num_queues; i++) {
-		if (gc->msi_sharing)
+		struct msi_map irq_map;
+		struct pci_dev *dev = to_pci_dev(gc->dev);
+		int irq;
+		if (gc->msi_sharing) {
 			spec.eq.msix_index = (i + 1) % gc->num_msix_usable;
-		else {
+			irq = pci_irq_vector(dev, spec.eq.msix_index);
+		} else {
 			int msi;
-			struct pci_dev *dev = to_pci_dev(gc->dev);
-			struct msi_map irq_map;
-			int irq;
-			struct gdma_irq_context *gic;
 
-			msi = find_first_zero_bit(gc->msi_bitmap, gc->num_msix_usable);
-			irq_map = pci_msix_alloc_irq_at(dev, msi, NULL);
-			if (!irq_map.virq) {
-				err = irq_map.index;
+			gic = mana_get_gic(gc, true, apc->port_idx, i, &msi);
+			if (!gic)
 				goto out;
-			}
-
-			gic = kzalloc(sizeof(*gic), GFP_KERNEL);
-			gic->handler = mana_gd_process_eq_events;
-			INIT_LIST_HEAD(&gic->eq_list);
-			spin_lock_init(&gic->lock);
-	                snprintf(gic->name, MANA_IRQ_NAME_SZ, "mana_p%dq%d@pci:%s", apc->port_idx, msi, pci_name(dev));
-
-			irq = pci_irq_vector(dev, msi);
-			request_irq(irq, mana_gd_intr, 0, gic->name, gic);
-
-			xa_store(&gc->irq_contexts, msi, gic, GFP_KERNEL);
-
-			/* TODO need a lock for msi_bitmap */
-			set_bit(spec.eq.msix_index, gc->msi_bitmap);
+			spec.eq.msix_index = msi;
 		}
 
 		err = mana_gd_create_mana_eq(gd, &spec, &apc->eqs[i].eq);
@@ -1382,6 +1458,7 @@ int mana_create_eq(struct mana_port_context *apc)
 			dev_err(gc->dev, "Failed to create EQ %d : %d\n", i, err);
 			goto out;
 		}
+		apc->eqs[i].eq->eq.irq_map = gic->irq_map;
 		mana_create_eq_debugfs(apc, i);
 	}
 

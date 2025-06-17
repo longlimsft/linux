@@ -119,8 +119,11 @@ static int mana_gd_query_max_resources(struct pci_dev *pdev)
 	gdma_mana_query_device_cfg(gc, MANA_MAJOR_VERSION, MANA_MINOR_VERSION,
 				   MANA_MICRO_VERSION, &num_ports);
 
+	gc->max_num_queues = 8;
+
 	if (gc->max_num_queues * num_ports > gc->num_msix_usable - 1)
 		gc->msi_sharing = true;
+
 
 	printk(KERN_ERR "%s: num_msix_usable %d max_num_queues %d num_ports %d\n", __func__, gc->num_msix_usable, gc->max_num_queues, num_ports);
 
@@ -540,7 +543,9 @@ static void mana_gd_deregiser_irq(struct gdma_queue *queue)
 	}
 	spin_unlock_irqrestore(&gic->lock, flags);
 
-	queue->eq.msix_index = INVALID_PCI_MSIX_INDEX;
+	if (gc->msi_sharing)
+		queue->eq.msix_index = INVALID_PCI_MSIX_INDEX;
+
 	synchronize_rcu();
 }
 
@@ -1434,6 +1439,7 @@ static int mana_gd_setup_dyn_irqs(struct pci_dev *pdev, int nvec)
 		if (err)
 			goto free_current_gic;
 
+		refcount_set(&gic->refcount, 1);
 		xa_store(&gc->irq_contexts, i, gic, GFP_KERNEL);
 	}
 
@@ -1517,6 +1523,8 @@ static int mana_gd_setup_irqs(struct pci_dev *pdev, int nvec)
 		if (err)
 			goto free_current_gic;
 
+		refcount_set(&gic->refcount, 1);
+		printk(KERN_ERR "%s: gic %px refcount %d\n", __func__, gic, refcount_read(&gic->refcount));
 		xa_store(&gc->irq_contexts, i, gic, GFP_KERNEL);
 	}
 
@@ -1639,7 +1647,9 @@ static void mana_gd_remove_irqs(struct pci_dev *pdev)
 	if (gc->max_num_msix < 1)
 		return;
 
-	for (i = 0; i < gc->max_num_msix; i++) {
+	printk(KERN_ERR "%s: gc->msi_sharing %d\n", __func__, gc->msi_sharing);
+
+	for (i = 0; i < (gc->msi_sharing ? gc->max_num_msix : 1); i++) {
 		irq = pci_irq_vector(pdev, i);
 		if (irq < 0)
 			continue;
@@ -1648,12 +1658,24 @@ static void mana_gd_remove_irqs(struct pci_dev *pdev)
 		if (WARN_ON(!gic))
 			continue;
 
+		printk(KERN_ERR "%s: refcount is %d\n", __func__, refcount_read(&gic->refcount));
+		if (!refcount_dec_and_test(&gic->refcount))
+			goto free_bitmap;
+
+		printk(KERN_ERR "%s: removing irq %d\n", __func__, irq);
+
 		/* Need to clear the hint before free_irq */
 		irq_update_affinity_hint(irq, NULL);
 		free_irq(irq, gic);
 		xa_erase(&gc->irq_contexts, i);
 		kfree(gic);
+
+free_bitmap:
+		if (!gc->msi_sharing)
+			clear_bit(i, gc->msi_bitmap);
 	}
+
+	printk(KERN_ERR "%s: calling pci_free_irq_vectors\n", __func__);
 
 	pci_free_irq_vectors(pdev);
 
@@ -1699,7 +1721,7 @@ static int mana_gd_setup(struct pci_dev *pdev)
 			goto destroy_hwc;
 		}
 		// Set bit for HWC
-		set_bit(1, gc->msi_bitmap);
+		set_bit(0, gc->msi_bitmap);
 	} else {
 		err = mana_gd_setup_remaining_irqs(pdev);
 		if (err) {
@@ -1826,12 +1848,16 @@ static void mana_gd_remove(struct pci_dev *pdev)
 {
 	struct gdma_context *gc = pci_get_drvdata(pdev);
 
+	printk(KERN_ERR "%s: check %d\n", __func__, __LINE__);
 	mana_remove(&gc->mana, false);
 
+	printk(KERN_ERR "%s: check %d\n", __func__, __LINE__);
 	mana_gd_cleanup(pdev);
 
+	printk(KERN_ERR "%s: check %d\n", __func__, __LINE__);
 	debugfs_remove_recursive(gc->mana_pci_debugfs);
 
+	printk(KERN_ERR "%s: check %d\n", __func__, __LINE__);
 	gc->mana_pci_debugfs = NULL;
 
 	xa_destroy(&gc->irq_contexts);

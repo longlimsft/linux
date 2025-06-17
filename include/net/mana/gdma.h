@@ -6,6 +6,7 @@
 
 #include <linux/dma-mapping.h>
 #include <linux/netdevice.h>
+#include <linux/msi.h>
 
 #include "shm_channel.h"
 
@@ -317,6 +318,7 @@ struct gdma_queue {
 			void *context;
 
 			unsigned int msix_index;
+			struct msi_map irq_map;
 
 			u32 log2_throttle_limit;
 		} eq;
@@ -363,6 +365,8 @@ struct gdma_irq_context {
 	spinlock_t lock;
 	struct list_head eq_list;
 	char name[MANA_IRQ_NAME_SZ];
+	struct msi_map irq_map;
+	refcount_t refcount;
 };
 
 struct gdma_context {
@@ -909,4 +913,6 @@ int gdma_mana_query_vport_cfg(struct gdma_context *gc, u32 vport_index,
 
 void mana_gd_process_eq_events(void *arg);
 irqreturn_t mana_gd_intr(int irq, void *arg);
+
+struct gdma_irq_context* mana_get_gic(struct gdma_context *gc, bool use_bitmap, u16 port_index, int queue_index, int *msi_requested);
 #endif /* _GDMA_H */
