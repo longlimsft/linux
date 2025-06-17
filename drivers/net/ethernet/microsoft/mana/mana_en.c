@@ -1305,6 +1305,11 @@ void mana_destroy_eq(struct mana_port_context *apc)
 		mana_gd_destroy_queue(gc, eq);
 
 		if (!gc->msi_sharing) {
+			mana_remove_gic(gc, true, eq->eq.msix_index);
+		};
+
+		/*
+		if (!gc->msi_sharing) {
 			struct pci_dev *dev = to_pci_dev(gc->dev);
 			int msi = eq->eq.msix_index;
 			struct msi_map irq_map = eq->eq.irq_map;
@@ -1331,6 +1336,7 @@ void mana_destroy_eq(struct mana_port_context *apc)
 clear_bitmap:
 			clear_bit(msi, gc->msi_bitmap);
 		}
+		*/
 	}
 
 	kfree(apc->eqs);
@@ -1350,6 +1356,37 @@ static void mana_create_eq_debugfs(struct mana_port_context *apc, int i)
 	debugfs_create_u32("irq", 0400, eq.mana_eq_debugfs, &eq.eq->eq.irq_map.virq);
 	debugfs_create_file("eq_dump", 0400, eq.mana_eq_debugfs, eq.eq, &mana_dbg_q_fops);
 }
+
+void mana_remove_gic(struct gdma_context *gc, bool use_bitmap, int msi)
+{
+	struct pci_dev *dev = to_pci_dev(gc->dev);
+	struct msi_map irq_map;
+	struct gdma_irq_context *gic;
+	int irq;
+
+	gic = xa_load(&gc->irq_contexts, msi);
+	if (WARN_ON(!gic))
+		return;
+
+	if (!refcount_dec_and_test(&gic->refcount))
+		goto clear_bitmap;
+
+	irq = pci_irq_vector(dev, msi);
+	irq_map = gic->irq_map;
+
+	printk(KERN_ERR "%s: removing irq %d msi %d\n", __func__, irq, msi);
+
+	irq_update_affinity_hint(irq, NULL);
+	free_irq(irq, gic);
+	pci_msix_free_irq(dev, irq_map);
+	xa_erase(&gc->irq_contexts, msi);
+	kfree(gic);
+
+clear_bitmap:
+	if (use_bitmap)
+		clear_bit(msi, gc->msi_bitmap);
+}
+EXPORT_SYMBOL_NS(mana_remove_gic, "NET_MANA");
 
 struct gdma_irq_context* mana_get_gic(struct gdma_context *gc, bool use_bitmap, u16 port_index, int queue_index, int *msi_requested)
 {
@@ -1438,12 +1475,8 @@ int mana_create_eq(struct mana_port_context *apc)
 	apc->mana_eqs_debugfs = debugfs_create_dir("EQs", apc->mana_port_debugfs);
 
 	for (i = 0; i < apc->num_queues; i++) {
-		struct msi_map irq_map;
-		struct pci_dev *dev = to_pci_dev(gc->dev);
-		int irq;
 		if (gc->msi_sharing) {
 			spec.eq.msix_index = (i + 1) % gc->num_msix_usable;
-			irq = pci_irq_vector(dev, spec.eq.msix_index);
 		} else {
 			int msi;
 

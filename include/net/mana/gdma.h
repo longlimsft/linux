@@ -915,4 +915,5 @@ void mana_gd_process_eq_events(void *arg);
 irqreturn_t mana_gd_intr(int irq, void *arg);
 
 struct gdma_irq_context* mana_get_gic(struct gdma_context *gc, bool use_bitmap, u16 port_index, int queue_index, int *msi_requested);
+void mana_remove_gic(struct gdma_context *gc, bool use_bitmap, int msi);
 #endif /* _GDMA_H */
