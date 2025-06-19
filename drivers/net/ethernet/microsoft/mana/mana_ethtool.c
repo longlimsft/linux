@@ -454,18 +454,40 @@ static int mana_set_coalesce(struct net_device *ndev,
 	return err;
 }
 
+/* mana_set_channels - change the number of queues on a port
+ *
+ * Returns -EBUSY if the port is down and RDMA holds the vport with
+ * EQs sized to the current num_queues.
+ */
 static int mana_set_channels(struct net_device *ndev,
 			     struct ethtool_channels *channels)
 {
 	struct mana_port_context *apc = netdev_priv(ndev);
 	unsigned int new_count = channels->combined_count;
 	unsigned int old_count = apc->num_queues;
+	bool locked = false;
 	int err;
+
+	/* When the port is down, hold vport_mutex for the entire
+	 * operation to serialize against RDMA's mana_cfg_vport().
+	 * This is safe because mana_detach()/mana_attach() skip
+	 * vport teardown/setup when port_st_save is false.
+	 * When the port is up, Ethernet owns the vport exclusively
+	 * so no locking against RDMA is needed.
+	 */
+	if (!apc->port_is_up) {
+		mutex_lock(&apc->vport_mutex);
+		if (apc->vport_use_count) {
+			mutex_unlock(&apc->vport_mutex);
+			return -EBUSY;
+		}
+		locked = true;
+	}
 
 	err = mana_pre_alloc_rxbufs(apc, ndev->mtu, new_count);
 	if (err) {
 		netdev_err(ndev, "Insufficient memory for new allocations");
-		return err;
+		goto unlock;
 	}
 
 	err = mana_detach(ndev, false);
@@ -483,6 +505,9 @@ static int mana_set_channels(struct net_device *ndev,
 
 out:
 	mana_pre_dealloc_rxbufs(apc);
+unlock:
+	if (locked)
+		mutex_unlock(&apc->vport_mutex);
 	return err;
 }
 
