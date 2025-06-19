@@ -473,9 +473,6 @@ struct mana_context {
 	u16 num_ports;
 	u8 bm_hostmode;
 
-	struct mana_eq *eqs;
-	struct dentry *mana_eqs_debugfs;
-
 	struct net_device *ports[MAX_PORTS_IN_MANA_DEV];
 };
 
@@ -484,6 +481,9 @@ struct mana_port_context {
 	struct net_device *ndev;
 
 	u8 mac_addr[ETH_ALEN];
+
+	struct mana_eq *eqs;
+	struct dentry *mana_eqs_debugfs;
 
 	enum TRI_STATE rss_state;
 
@@ -1008,6 +1008,8 @@ void mana_destroy_wq_obj(struct mana_port_context *apc, u32 wq_type,
 int mana_cfg_vport(struct mana_port_context *apc, u32 protection_dom_id,
 		   u32 doorbell_pg_id);
 void mana_uncfg_vport(struct mana_port_context *apc);
+int mana_create_eq(struct mana_port_context *apc);
+void mana_destroy_eq(struct mana_port_context *apc);
 
 struct net_device *mana_get_primary_netdev(struct mana_context *ac,
 					   u32 port_index,
