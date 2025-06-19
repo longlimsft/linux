@@ -102,6 +102,14 @@ struct mana_ib_pd {
 	struct mutex vport_mutex;
 	int vport_use_count;
 
+	/* Port bound to this PD for raw QP usage. A PD can only be
+	 * associated with a single physical port because per-port EQs
+	 * and vport configuration are tied to the PD's refcount.
+	 * Set on the first raw QP creation; subsequent QPs on the
+	 * same PD must use the same port or get -EINVAL.
+	 */
+	u32 vport_port;
+
 	bool tx_shortform_allowed;
 	u32 tx_vp_offset;
 };
