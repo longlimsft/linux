@@ -363,6 +363,9 @@ struct gdma_irq_context {
 	spinlock_t lock;
 	struct list_head eq_list;
 	char name[MANA_IRQ_NAME_SZ];
+	unsigned int msi;
+	unsigned int irq;
+	refcount_t refcount;
 };
 
 struct gdma_context {
@@ -410,6 +413,7 @@ struct gdma_context {
 	/* Azure RDMA adapter */
 	struct gdma_dev		mana_ib;
 
+	struct mutex		gic_mutex;
 	bool msi_sharing;
 	unsigned long *msi_bitmap;
 };
@@ -905,6 +909,10 @@ int mana_gd_destroy_dma_region(struct gdma_context *gc, u64 dma_region_handle);
 void mana_register_debugfs(void);
 void mana_unregister_debugfs(void);
 
+struct gdma_irq_context *gdma_get_gic(struct gdma_context *gc, bool use_bitmap,
+				      u16 port_index, int queue_index,
+				      int *msi_requested);
+void gdma_put_gic(struct gdma_context *gc, bool use_bitmap, int msi);
 int mana_gd_query_device_cfg(struct gdma_context *gc, u32 proto_major_ver,
 			     u32 proto_minor_ver, u32 proto_micro_ver,
 			     u16 *max_num_vports);
