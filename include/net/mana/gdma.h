@@ -380,6 +380,9 @@ struct gdma_irq_context {
 	spinlock_t lock;
 	struct list_head eq_list;
 	char name[MANA_IRQ_NAME_SZ];
+	unsigned int msi;
+	unsigned int irq;
+	refcount_t refcount;
 };
 
 struct gdma_context {
@@ -430,6 +433,7 @@ struct gdma_context {
 	u64 pf_cap_flags1;
 
 	struct workqueue_struct *service_wq;
+	struct mutex		gic_mutex;
 	bool msi_sharing;
 	unsigned long *msi_bitmap;
 };
@@ -933,6 +937,9 @@ int mana_gd_resume(struct pci_dev *pdev);
 
 bool mana_need_log(struct gdma_context *gc, int err);
 
+struct gdma_irq_context *gdma_get_gic(struct gdma_context *gc, bool use_bitmap,
+				      int *msi_requested);
+void gdma_put_gic(struct gdma_context *gc, bool use_bitmap, int msi);
 int mana_gd_query_device_cfg(struct gdma_context *gc, u32 proto_major_ver,
 			     u32 proto_minor_ver, u32 proto_micro_ver,
 			     u16 *max_num_vports, u8 *bm_hostmode);
