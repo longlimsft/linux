@@ -598,7 +598,7 @@ static void mana_gd_process_eqe(struct gdma_queue *eq)
 	}
 }
 
-static void mana_gd_process_eq_events(void *arg)
+static int mana_gd_process_eq_events(void *arg)
 {
 	u32 owner_bits, new_bits, old_bits;
 	union gdma_eqe_info eqe_info;
@@ -606,7 +606,10 @@ static void mana_gd_process_eq_events(void *arg)
 	struct gdma_queue *eq = arg;
 	struct gdma_context *gc;
 	struct gdma_eqe *eqe;
-	u32 head, num_eqe;
+	bool ring = false;
+	int work_done = 0;
+	u8 arm_bit = 0;
+	u32 num_eqe;
 	int i;
 
 	gc = eq->gdma_dev->gdma_context;
@@ -614,8 +617,8 @@ static void mana_gd_process_eq_events(void *arg)
 	num_eqe = eq->queue_size / GDMA_EQE_SIZE;
 	eq_eqe_ptr = eq->queue_mem_ptr;
 
-	/* Process up to 5 EQEs at a time, and update the HW head. */
-	for (i = 0; i < 5; i++) {
+	/* Process up to 4 EQ wraparounds at a time, and update the HW head. */
+	for (i = 0; i < eq->queue_size / GDMA_EQE_SIZE * 4; i++) {
 		eqe = &eq_eqe_ptr[eq->head % num_eqe];
 		eqe_info.as_uint32 = eqe->eqe_info;
 		owner_bits = eqe_info.owner_bits;
@@ -623,9 +626,16 @@ static void mana_gd_process_eq_events(void *arg)
 		old_bits = (eq->head / num_eqe - 1) & GDMA_EQE_OWNER_MASK;
 		/* No more entries */
 		if (owner_bits == old_bits) {
-			/* return here without ringing the doorbell */
-			if (i == 0)
-				return;
+			/*
+			 * For HWC and RDMA, return without ringing the doorbell.
+			 * For MANA, we are in NAPI context. Need to complete
+			 * NAPI before return.
+			 */
+			if (i == 0) {
+				if (mana_gd_is_mana(eq->gdma_dev))
+					napi_complete_done(&eq->eq.napi, 0);
+				return 0;
+			}
 			break;
 		}
 
@@ -642,13 +652,88 @@ static void mana_gd_process_eq_events(void *arg)
 
 		mana_gd_process_eqe(eq);
 
-		eq->head++;
+		if (mana_gd_is_mana(eq->gdma_dev)) {
+			if (eq->eq.work_done < eq->eq.budget)
+				eq->head++;
+			else
+				/*
+				 * Don't need to update EQ head as it will be
+				 * processed by the next NAPI poll
+				 */
+				break;
+		} else {
+			eq->head++;
+		}
 	}
 
-	head = eq->head % (num_eqe << GDMA_EQE_OWNER_BITS);
+	eq->eq.eqe_done_since_doorbell += i;
 
-	mana_gd_ring_doorbell(gc, eq->gdma_dev->doorbell, eq->type, eq->id,
-			      head, SET_ARM_BIT);
+	/* Always arm the EQ for non-MANA device (HWC and RDMA) */
+	if (!mana_gd_is_mana(eq->gdma_dev))
+		arm_bit = SET_ARM_BIT;
+
+	/*
+	 * For MANA, arm the EQ when we have not used all NAPI budget.
+	 * MANA hardware requires at least one doorbell ring every 8
+	 * wraparounds of EQ even if there is no need to arm the EQ.
+	 * This driver rings the doorbell as soon as we have exceeded
+	 * 4 wraparounds.
+	 */
+	if (mana_gd_is_mana(eq->gdma_dev)) {
+		ring = eq->eq.eqe_done_since_doorbell > eq->queue_size / GDMA_EQE_SIZE * 4;
+		if (ring)
+			eq->eq.eqe_done_since_doorbell = 0;
+
+		work_done = eq->eq.work_done;
+		if (work_done < eq->eq.budget)
+			arm_bit = SET_ARM_BIT;
+	}
+
+	if (arm_bit || ring)
+		mana_gd_ring_doorbell(gc, eq->gdma_dev->doorbell, eq->type, eq->id,
+				      eq->head % (num_eqe << GDMA_EQE_OWNER_BITS), arm_bit);
+
+	if (mana_gd_is_mana(eq->gdma_dev) && work_done < eq->eq.budget)
+		napi_complete_done(&eq->eq.napi, work_done);
+
+	return work_done;
+}
+
+int mana_poll(struct napi_struct *napi, int budget)
+{
+	struct gdma_queue *eq = container_of(napi, struct gdma_queue, eq.napi);
+	int work_done;
+
+	eq->eq.work_done = 0;
+	eq->eq.budget = budget;
+
+	work_done = mana_gd_process_eq_events(eq);
+
+	return min(work_done, budget);
+}
+
+static void mana_gd_schedule_napi(void *arg)
+{
+	struct gdma_queue *eq = arg;
+	struct napi_struct *napi;
+
+	napi = &eq->eq.napi;
+	napi_schedule_irqoff(napi);
+}
+
+static void gic_handler(void *arg)
+{
+	struct gdma_queue *eq = arg;
+	struct gdma_dev *dev = eq->gdma_dev;
+
+	/*
+	 * Process an interrupt on the EQ. Schedule NAPI if this is a MANA
+	 * device. For HWC and RDMA devices, process EQ directly from interrupt
+	 */
+	if (mana_gd_is_mana(dev))
+		mana_gd_schedule_napi(eq);
+	else
+		mana_gd_process_eq_events(eq);
 }
 
 static int mana_gd_register_irq(struct gdma_queue *queue,
@@ -679,9 +764,16 @@ static int mana_gd_register_irq(struct gdma_queue *queue,
 	if (WARN_ON(!gic))
 		return -EINVAL;
 
+	if (mana_gd_is_mana(gd)) {
+		netif_napi_add_locked(spec->eq.ndev, &queue->eq.napi, mana_poll);
+		napi_enable_locked(&queue->eq.napi);
+	}
+
 	spin_lock_irqsave(&gic->lock, flags);
 	list_add_rcu(&queue->entry, &gic->eq_list);
 	spin_unlock_irqrestore(&gic->lock, flags);
+
+	synchronize_rcu();
 
 	return 0;
 }
@@ -706,6 +798,12 @@ static void mana_gd_deregister_irq(struct gdma_queue *queue)
 	if (WARN_ON(!gic))
 		return;
 
+	if (mana_gd_is_mana(gd)) {
+		napi_disable_locked(&queue->eq.napi);
+		netif_napi_del_locked(&queue->eq.napi);
+		page_pool_destroy(queue->eq.page_pool);
+	}
+
 	spin_lock_irqsave(&gic->lock, flags);
 	list_for_each_entry_rcu(eq, &gic->eq_list, entry) {
 		if (queue == eq) {
@@ -714,7 +812,6 @@ static void mana_gd_deregister_irq(struct gdma_queue *queue)
 		}
 	}
 	spin_unlock_irqrestore(&gic->lock, flags);
-
 	synchronize_rcu();
 }
 
@@ -804,6 +901,13 @@ static int mana_gd_create_eq(struct gdma_dev *gd,
 		return -EINVAL;
 	}
 
+	/*
+	 * queue->head could be checked as soon as the IRQ is registered and
+	 * this queue is added to EQ list for the interrupt. Need to setup this
+	 * value before making the call to mana_gd_register_irq()
+	 */
+	queue->head |= INITIALIZED_OWNER_BIT(log2_num_entries);
+	mb();
 	err = mana_gd_register_irq(queue, spec);
 	if (err) {
 		dev_err(dev, "Failed to register irq: %d\n", err);
@@ -812,7 +916,6 @@ static int mana_gd_create_eq(struct gdma_dev *gd,
 
 	queue->eq.callback = spec->eq.callback;
 	queue->eq.context = spec->eq.context;
-	queue->head |= INITIALIZED_OWNER_BIT(log2_num_entries);
 	queue->eq.log2_throttle_limit = spec->eq.log2_throttle_limit ?: 1;
 
 	if (create_hwq) {
@@ -1563,7 +1666,7 @@ struct gdma_irq_context *mana_gd_get_gic(struct gdma_context *gc,
 	if (!gic)
 		goto out;
 
-	gic->handler = mana_gd_process_eq_events;
+	gic->handler = gic_handler;
 	gic->msi = msi;
 	gic->irq = irq;
 	INIT_LIST_HEAD(&gic->eq_list);
