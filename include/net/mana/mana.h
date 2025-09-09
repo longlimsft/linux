@@ -283,14 +283,8 @@ struct mana_cq {
 	 */
 	struct mana_txq *txq;
 
-	/* Buffer which the CQ handler can copy the CQE's into. */
-	struct gdma_comp gdma_comp_buf[CQE_POLLING_BUFFER];
-
-	/* NAPI data */
-	struct napi_struct napi;
-	int work_done;
-	int work_done_since_doorbell;
-	int budget;
+	/* Pointer to a buffer which the CQ handler can copy the CQE's into. */
+	struct gdma_comp *gdma_comp_buf;
 };
 
 struct mana_recv_buf_oob {
