@@ -267,8 +267,10 @@ struct gdma_event {
 
 struct gdma_queue;
 
+#define CQE_POLLING_BUFFER 512
 struct mana_eq {
 	struct gdma_queue	*eq;
+	struct gdma_comp cqe_poll[CQE_POLLING_BUFFER];
 	struct dentry		*mana_eq_debugfs;
 };
 
@@ -320,6 +322,11 @@ struct gdma_queue {
 			unsigned int irq;
 
 			u32 log2_throttle_limit;
+
+			/* NAPI data */
+			struct napi_struct napi;
+			int work_done;
+			int budget;
 		} eq;
 
 		struct {
@@ -344,6 +351,8 @@ struct gdma_queue_spec {
 
 			unsigned long log2_throttle_limit;
 			unsigned int msix_index;
+
+			struct net_device *ndev;
 		} eq;
 
 		struct {
