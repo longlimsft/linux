@@ -327,6 +327,8 @@ struct gdma_queue {
 			struct napi_struct napi;
 			int work_done;
 			int budget;
+
+			struct page_pool *page_pool;
 		} eq;
 
 		struct {
@@ -929,4 +931,5 @@ void gdma_put_gic(struct gdma_context *gc, bool use_bitmap, int msi);
 int mana_gd_query_device_cfg(struct gdma_context *gc, u32 proto_major_ver,
 			     u32 proto_minor_ver, u32 proto_micro_ver,
 			     u16 *max_num_vports);
+int mana_poll(struct napi_struct *napi, int budget);
 #endif /* _GDMA_H */

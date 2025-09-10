@@ -2076,23 +2076,8 @@ out:
 	return err;
 }
 
-static void mana_napi_sync_for_rx(struct mana_rxq *rxq)
-{
-	struct net_device *ndev = rxq->ndev;
-	struct mana_port_context *apc;
-	u16 rxq_idx = rxq->rxq_idx;
-	struct napi_struct *napi;
-	struct gdma_queue *eq;
-
-	apc = netdev_priv(ndev);
-	eq = apc->eqs[rxq_idx].eq;
-	napi = &eq->eq.napi;
-
-	napi_synchronize(napi);
-}
-
 static void mana_destroy_rxq(struct mana_port_context *apc,
-			     struct mana_rxq *rxq, bool napi_initialized)
+			     struct mana_rxq *rxq)
 
 {
 	struct gdma_context *gc = apc->ac->gdma_dev->gdma_context;
@@ -2108,9 +2093,6 @@ static void mana_destroy_rxq(struct mana_port_context *apc,
 	rxq->mana_rx_debugfs = NULL;
 
 	xdp_rxq_info_unreg(&rxq->xdp_rxq);
-
-	if (napi_initialized)
-		mana_napi_sync_for_rx(rxq);
 
 	mana_destroy_wq_obj(apc, GDMA_RQ, rxq->rxobj);
 
@@ -2137,8 +2119,6 @@ static void mana_destroy_rxq(struct mana_port_context *apc,
 
 		rx_oob->buf_va = NULL;
 	}
-
-	page_pool_destroy(rxq->page_pool);
 
 	if (rxq->gdma_rq)
 		mana_gd_destroy_queue(gc, rxq->gdma_rq);
@@ -2247,10 +2227,12 @@ static int mana_create_page_pool(struct mana_rxq *rxq, struct gdma_context *gc)
 	pprm.netdev = rxq->ndev;
 	pprm.order = get_order(rxq->alloc_size);
 
-	rxq->page_pool = page_pool_create(&pprm);
+	eq->eq.page_pool = page_pool_create(&pprm);
+	rxq->page_pool = eq->eq.page_pool;
 
 	if (IS_ERR(rxq->page_pool)) {
 		ret = PTR_ERR(rxq->page_pool);
+		eq->eq.page_pool = NULL;
 		rxq->page_pool = NULL;
 		return ret;
 	}
@@ -2374,7 +2356,7 @@ out:
 
 	netdev_err(ndev, "Failed to create RXQ: err = %d\n", err);
 
-	mana_destroy_rxq(apc, rxq, false);
+	mana_destroy_rxq(apc, rxq);
 
 	if (cq)
 		mana_deinit_cq(apc, cq);
@@ -2441,7 +2423,7 @@ static void mana_destroy_rxqs(struct mana_port_context *apc)
 		if (!rxq)
 			continue;
 
-		mana_destroy_rxq(apc, rxq, true);
+		mana_destroy_rxq(apc, rxq);
 		apc->rxqs[rxq_idx] = NULL;
 	}
 }

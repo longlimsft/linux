@@ -97,6 +97,8 @@ static int mana_gd_query_max_resources(struct pci_dev *pdev)
 	if (gc->num_msix_usable <= 1)
 		return -ENOSPC;
 
+//	gc->num_msix_usable = 2;
+
 	gc->max_num_queues = num_online_cpus();
 	if (gc->max_num_queues > MANA_MAX_NUM_QUEUES)
 		gc->max_num_queues = MANA_MAX_NUM_QUEUES;
@@ -560,7 +562,12 @@ static void mana_gd_process_eq_events(void *arg)
 
 		mana_gd_process_eqe(eq);
 
-		eq->head++;
+		if (mana_gd_is_hwc(eq->gdma_dev))
+			eq->head++;
+		else if (eq->eq.work_done < eq->eq.budget)
+			eq->head++;
+		else
+			break;
 	}
 
 	/* Always rearm the EQ for HWC. For MANA, rearm it when NAPI is done. */
@@ -573,13 +580,16 @@ static void mana_gd_process_eq_events(void *arg)
 		arm_bit = 0;
 	}
 
+	trace_dump_stack(0);
+	trace_printk("eq type %d id %d budget %d work_done %d head %d arm_bit %d\n", eq->type, eq->id, eq->eq.budget, eq->eq.work_done, eq->head, arm_bit);
+
 	head = eq->head % (num_eqe << GDMA_EQE_OWNER_BITS);
 
 	mana_gd_ring_doorbell(gc, eq->gdma_dev->doorbell, eq->type, eq->id,
 			      head, arm_bit);
 }
 
-static int mana_poll(struct napi_struct *napi, int budget)
+int mana_poll(struct napi_struct *napi, int budget)
 {
 	struct gdma_queue *eq = container_of(napi, struct gdma_queue, eq.napi);
 
@@ -588,6 +598,8 @@ static int mana_poll(struct napi_struct *napi, int budget)
 
 	mana_gd_process_eq_events(eq);
 
+	trace_printk("budget %d eq->eq.work_done %d\n", budget, eq->eq.work_done);
+
 	return min(eq->eq.work_done, budget);
 }
 
@@ -595,6 +607,8 @@ static void mana_gd_schedule_napi(void *arg)
 {
 	struct gdma_queue *eq = arg;
 	struct napi_struct *napi;
+
+	trace_printk("eq id %d\n", eq->id);
 
 	napi = &eq->eq.napi;
 	napi_schedule_irqoff(napi);
@@ -630,11 +644,9 @@ static int mana_gd_register_irq(struct gdma_queue *queue,
 		return -EINVAL;
 
 	if (is_mana) {
-		netif_napi_add(spec->eq.ndev, &queue->eq.napi, mana_poll);
-//		netif_napi_add(spec->eq.ndev, &queue->eq.napi, mana_poll,
-//			       NAPI_POLL_WEIGHT);
-		napi_enable(&queue->eq.napi);
 		gic->handler = mana_gd_schedule_napi;
+		netif_napi_add(spec->eq.ndev, &queue->eq.napi, mana_poll);
+		napi_enable(&queue->eq.napi);
 	}
 
 	spin_lock_irqsave(&gic->lock, flags);
@@ -663,6 +675,12 @@ static void mana_gd_deregiser_irq(struct gdma_queue *queue)
 	gic = xa_load(&gc->irq_contexts, msix_index);
 	if (WARN_ON(!gic))
 		return;
+
+	if (mana_gd_is_mana(gd)) {
+		napi_disable(&queue->eq.napi);
+		netif_napi_del(&queue->eq.napi);
+		page_pool_destroy(queue->eq.page_pool);
+	}
 
 	spin_lock_irqsave(&gic->lock, flags);
 	list_for_each_entry_rcu(eq, &gic->eq_list, entry) {
