@@ -542,7 +542,7 @@ static void mana_gd_process_eq_events(void *arg)
 		/* No more entries */
 		if (owner_bits == old_bits) {
 			/* return here without ringing the doorbell */
-			if (i == 0)
+			if (!mana_gd_is_mana(eq->gdma_dev) && i == 0)
 				return;
 			break;
 		}
@@ -560,21 +560,38 @@ static void mana_gd_process_eq_events(void *arg)
 
 		mana_gd_process_eqe(eq);
 
-		if (mana_gd_is_hwc(eq->gdma_dev))
+		if (mana_gd_is_mana(eq->gdma_dev)) {
+			if (eq->eq.work_done < eq->eq.budget)
+				eq->head++;
+			else
+				/* Don't update last EQ index as it will be processed by the next napi poll */
+				break;
+		} else {
 			eq->head++;
-		else if (eq->eq.work_done < eq->eq.budget)
-			eq->head++;
-		else
-			break;
+		}
+
+//		if (mana_gd_is_hwc(eq->gdma_dev))
+//			eq->head++;
+//		else if (eq->eq.work_done < eq->eq.budget)
+//			eq->head++;
+//		else
+//			break;
 	}
 
 	eq->eq.eqe_done_since_doorbell += i;
 
 	/* Always rearm the EQ for HWC. For MANA, rearm it when NAPI is done. */
-	if (mana_gd_is_hwc(eq->gdma_dev)) {
-		arm_bit = SET_ARM_BIT;
-	} else if (eq->eq.work_done < eq->eq.budget &&
-		   napi_complete_done(&eq->eq.napi, eq->eq.work_done)) {
+//	if (mana_gd_is_hwc(eq->gdma_dev)) {
+//		arm_bit = SET_ARM_BIT;
+//	} else if (eq->eq.work_done < eq->eq.budget &&
+//		   napi_complete_done(&eq->eq.napi, eq->eq.work_done)) {
+//		arm_bit = SET_ARM_BIT;
+//	}
+	if (mana_gd_is_mana(eq->gdma_dev)) {
+		if (eq->eq.work_done < eq->eq.budget &&
+		    napi_complete_done(&eq->eq.napi, eq->eq.work_done))
+			arm_bit = SET_ARM_BIT;
+	} else {
 		arm_bit = SET_ARM_BIT;
 	}
 
@@ -608,11 +625,21 @@ static void mana_gd_schedule_napi(void *arg)
 	napi_schedule_irqoff(napi);
 }
 
+static void gic_handler(void *arg)
+{
+	struct gdma_queue *eq = arg;
+	struct gdma_dev *dev = eq->gdma_dev;
+
+	if (mana_gd_is_mana(dev))
+		mana_gd_schedule_napi(eq);
+	else
+		mana_gd_process_eq_events(eq);
+}
+
 static int mana_gd_register_irq(struct gdma_queue *queue,
 				const struct gdma_queue_spec *spec)
 {
 	struct gdma_dev *gd = queue->gdma_dev;
-	bool is_mana = mana_gd_is_mana(gd);
 	struct gdma_irq_context *gic;
 	struct gdma_context *gc;
 	unsigned int msi_index;
@@ -637,8 +664,7 @@ static int mana_gd_register_irq(struct gdma_queue *queue,
 	if (WARN_ON(!gic))
 		return -EINVAL;
 
-	if (is_mana) {
-		gic->handler = mana_gd_schedule_napi;
+	if (mana_gd_is_mana(gd)) {
 		netif_napi_add(spec->eq.ndev, &queue->eq.napi, mana_poll);
 		napi_enable(&queue->eq.napi);
 	}
@@ -646,6 +672,8 @@ static int mana_gd_register_irq(struct gdma_queue *queue,
 	spin_lock_irqsave(&gic->lock, flags);
 	list_add_rcu(&queue->entry, &gic->eq_list);
 	spin_unlock_irqrestore(&gic->lock, flags);
+
+	synchronize_rcu();
 
 	return 0;
 }
@@ -1444,6 +1472,7 @@ void gdma_put_gic(struct gdma_context *gc, bool use_bitmap, int msi)
 	struct gdma_irq_context *gic;
 	int irq;
 
+
 	mutex_lock(&gc->gic_mutex);
 
 	gic = xa_load(&gc->irq_contexts, msi);
@@ -1523,7 +1552,7 @@ struct gdma_irq_context *gdma_get_gic(struct gdma_context *gc, bool use_bitmap,
 		dev_err(gc->dev, "Failed to allocate gic\n");
 		goto out;
 	}
-	gic->handler = mana_gd_process_eq_events;
+	gic->handler = gic_handler;
 	gic->msi = msi;
 	gic->irq = irq;
 	INIT_LIST_HEAD(&gic->eq_list);

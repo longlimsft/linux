@@ -750,10 +750,14 @@ int mana_ib_create_eqs(struct mana_ib_dev *mdev)
 	spec.eq.msix_index = 0;
 
 	gic = gdma_get_gic(gc, false, 0, 0, &spec.eq.msix_index);
+	if (!gic)
+		return -ENOMEM;
 
 	err = mana_gd_create_mana_eq(&gc->mana_ib, &spec, &mdev->fatal_err_eq);
-	if (err)
+	if (err) {
+		gdma_put_gic(gc, false, 0);
 		return err;
+	}
 
 	mdev->eqs = kcalloc(mdev->ib_dev.num_comp_vectors, sizeof(struct gdma_queue *),
 			    GFP_KERNEL);
@@ -765,20 +769,27 @@ int mana_ib_create_eqs(struct mana_ib_dev *mdev)
 	for (i = 0; i < mdev->ib_dev.num_comp_vectors; i++) {
 		spec.eq.msix_index = (i + 1) % gc->num_msix_usable;
 
-		gic = gdma_get_gic(gc, false, 0, 0, &spec.eq.msix_index);
+		gic = gdma_get_gic(gc, false, 0, i, &spec.eq.msix_index);
+		if (!gic)
+			goto destroy_eqs;
 
 		err = mana_gd_create_mana_eq(mdev->gdma_dev, &spec, &mdev->eqs[i]);
-		if (err)
+		if (err) {
+			gdma_put_gic(gc, false, spec.eq.msix_index);
 			goto destroy_eqs;
+		}
 	}
 
 	return 0;
 
 destroy_eqs:
-	while (i-- > 0)
+	while (i-- > 0) {
+		gdma_put_gic(gc, false, (i + 1) % gc->num_msix_usable);
 		mana_gd_destroy_queue(gc, mdev->eqs[i]);
+	}
 	kfree(mdev->eqs);
 destroy_fatal_eq:
+	gdma_put_gic(gc, false, 0);
 	mana_gd_destroy_queue(gc, mdev->fatal_err_eq);
 	return err;
 }
