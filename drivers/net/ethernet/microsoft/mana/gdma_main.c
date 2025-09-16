@@ -70,6 +70,8 @@ static int mana_gd_query_max_resources(struct pci_dev *pdev)
 	struct gdma_context *gc = pci_get_drvdata(pdev);
 	struct gdma_query_max_resources_resp resp = {};
 	struct gdma_general_req req = {};
+	unsigned int max_num_queues;
+	u16 num_ports;
 	int err;
 
 	mana_gd_init_req_hdr(&req.hdr, GDMA_QUERY_MAX_RESOURCES,
@@ -114,6 +116,30 @@ static int mana_gd_query_max_resources(struct pci_dev *pdev)
 	/* The Hardware Channel (HWC) used 1 MSI-X */
 	if (gc->max_num_queues > gc->num_msix_usable - 1)
 		gc->max_num_queues = gc->num_msix_usable - 1;
+
+	err = mana_gd_query_device_cfg(gc, MANA_MAJOR_VERSION, MANA_MINOR_VERSION,
+				       MANA_MICRO_VERSION, &num_ports);
+	if (err)
+		return err;
+
+	/*
+	 * Adjust gc->max_num_queues returned from the SOC to allow dedicated MSIx
+	 * for each vPort. Reduce max_num_queues to no less than 16 if necessary
+	 */
+	max_num_queues = (gc->num_msix_usable - 1) / num_ports;
+	max_num_queues = roundup_pow_of_two(max_num_queues);
+	if (max_num_queues < 16)
+		max_num_queues = 16;
+
+	/*
+	 * Use dedicated MSIx for EQs whenever possible, use MSIx sharing for
+	 * Ethernet EQs when (max_num_queues * num_ports > num_msix_usable - 1)
+	 */
+	gc->max_num_queues = min(gc->max_num_queues, max_num_queues);
+	if (gc->max_num_queues * num_ports > gc->num_msix_usable - 1)
+		gc->msi_sharing = true;
+
+	dev_info(gc->dev, "MSI sharing mode %d max queues %d\n", gc->msi_sharing, gc->max_num_queues);
 
 	return 0;
 }
@@ -497,6 +523,7 @@ static void mana_gd_process_eq_events(void *arg)
 	struct gdma_queue *eq = arg;
 	struct gdma_context *gc;
 	struct gdma_eqe *eqe;
+	unsigned int arm_bit;
 	u32 head, num_eqe;
 	int i;
 
@@ -536,16 +563,48 @@ static void mana_gd_process_eq_events(void *arg)
 		eq->head++;
 	}
 
+	/* Always rearm the EQ for HWC. For MANA, rearm it when NAPI is done. */
+	if (mana_gd_is_hwc(eq->gdma_dev)) {
+		arm_bit = SET_ARM_BIT;
+	} else if (eq->eq.work_done < eq->eq.budget &&
+		   napi_complete_done(&eq->eq.napi, eq->eq.work_done)) {
+		arm_bit = SET_ARM_BIT;
+	} else {
+		arm_bit = 0;
+	}
+
 	head = eq->head % (num_eqe << GDMA_EQE_OWNER_BITS);
 
 	mana_gd_ring_doorbell(gc, eq->gdma_dev->doorbell, eq->type, eq->id,
-			      head, SET_ARM_BIT);
+			      head, arm_bit);
+}
+
+static int mana_poll(struct napi_struct *napi, int budget)
+{
+	struct gdma_queue *eq = container_of(napi, struct gdma_queue, eq.napi);
+
+	eq->eq.work_done = 0;
+	eq->eq.budget = budget;
+
+	mana_gd_process_eq_events(eq);
+
+	return min(eq->eq.work_done, budget);
+}
+
+static void mana_gd_schedule_napi(void *arg)
+{
+	struct gdma_queue *eq = arg;
+	struct napi_struct *napi;
+
+	napi = &eq->eq.napi;
+	napi_schedule_irqoff(napi);
 }
 
 static int mana_gd_register_irq(struct gdma_queue *queue,
 				const struct gdma_queue_spec *spec)
 {
 	struct gdma_dev *gd = queue->gdma_dev;
+	bool is_mana = mana_gd_is_mana(gd);
 	struct gdma_irq_context *gic;
 	struct gdma_context *gc;
 	unsigned int msi_index;
@@ -569,6 +628,14 @@ static int mana_gd_register_irq(struct gdma_queue *queue,
 	gic = xa_load(&gc->irq_contexts, msi_index);
 	if (WARN_ON(!gic))
 		return -EINVAL;
+
+	if (is_mana) {
+		netif_napi_add(spec->eq.ndev, &queue->eq.napi, mana_poll);
+//		netif_napi_add(spec->eq.ndev, &queue->eq.napi, mana_poll,
+//			       NAPI_POLL_WEIGHT);
+		napi_enable(&queue->eq.napi);
+		gic->handler = mana_gd_schedule_napi;
+	}
 
 	spin_lock_irqsave(&gic->lock, flags);
 	list_add_rcu(&queue->entry, &gic->eq_list);
@@ -606,7 +673,6 @@ static void mana_gd_deregiser_irq(struct gdma_queue *queue)
 	}
 	spin_unlock_irqrestore(&gic->lock, flags);
 
-	queue->eq.msix_index = INVALID_PCI_MSIX_INDEX;
 	synchronize_rcu();
 }
 
@@ -720,6 +786,7 @@ static int mana_gd_create_eq(struct gdma_dev *gd,
 out:
 	dev_err(dev, "Failed to create EQ: %d\n", err);
 	mana_gd_destroy_eq(gc, false, queue);
+	queue->eq.msix_index = INVALID_PCI_MSIX_INDEX;
 	return err;
 }
 
@@ -1358,6 +1425,129 @@ static irqreturn_t mana_gd_intr(int irq, void *arg)
 	return IRQ_HANDLED;
 }
 
+void gdma_put_gic(struct gdma_context *gc, bool use_bitmap, int msi)
+{
+	struct pci_dev *dev = to_pci_dev(gc->dev);
+	struct msi_map irq_map;
+	struct gdma_irq_context *gic;
+	int irq;
+
+	mutex_lock(&gc->gic_mutex);
+
+	gic = xa_load(&gc->irq_contexts, msi);
+	if (WARN_ON(!gic)) {
+		mutex_unlock(&gc->gic_mutex);
+		return;
+	}
+
+	if (!refcount_dec_and_test(&gic->refcount))
+		goto clear_bitmap;
+
+	irq = pci_irq_vector(dev, msi);
+
+	irq_update_affinity_hint(irq, NULL);
+	free_irq(irq, gic);
+
+	irq_map.virq = irq;
+	irq_map.index = msi;
+	pci_msix_free_irq(dev, irq_map);
+
+	xa_erase(&gc->irq_contexts, msi);
+	kfree(gic);
+
+clear_bitmap:
+	if (use_bitmap)
+		clear_bit(msi, gc->msi_bitmap);
+
+	mutex_unlock(&gc->gic_mutex);
+}
+EXPORT_SYMBOL_NS(gdma_put_gic, "NET_MANA");
+
+struct gdma_irq_context *gdma_get_gic(struct gdma_context *gc, bool use_bitmap,
+				      u16 port_index, int queue_index,
+				      int *msi_requested)
+{
+	struct gdma_irq_context *gic;
+	struct pci_dev *dev = to_pci_dev(gc->dev);
+	struct msi_map irq_map;
+	int irq;
+	int msi;
+	int err;
+
+	mutex_lock(&gc->gic_mutex);
+
+	if (use_bitmap) {
+		msi = find_first_zero_bit(gc->msi_bitmap, gc->num_msix_usable);
+		*msi_requested = msi;
+	} else {
+		msi = *msi_requested;
+	}
+
+	gic = xa_load(&gc->irq_contexts, msi);
+	if (gic) {
+		refcount_inc(&gic->refcount);
+		if (use_bitmap)
+			set_bit(msi, gc->msi_bitmap);
+		goto out;
+	}
+
+	irq = pci_irq_vector(dev, msi);
+	if (irq == -EINVAL) {
+		irq_map = pci_msix_alloc_irq_at(dev, msi, NULL);
+		if (!irq_map.virq) {
+			err = irq_map.index;
+			dev_err(gc->dev,
+				"Failed to alloc irq_map msi %d err %d\n",
+				msi, err);
+			gic = NULL;
+			goto out;
+		}
+		irq = irq_map.virq;
+		msi = irq_map.index;
+	}
+
+	gic = kzalloc(sizeof(*gic), GFP_KERNEL);
+	if (!gic) {
+		dev_err(gc->dev, "Failed to allocate gic\n");
+		goto out;
+	}
+	gic->handler = mana_gd_process_eq_events;
+	gic->msi = msi;
+	gic->irq = irq;
+	INIT_LIST_HEAD(&gic->eq_list);
+	spin_lock_init(&gic->lock);
+
+	if (!gic->msi)
+		snprintf(gic->name, MANA_IRQ_NAME_SZ, "mana_hwc@pci:%s",
+			 pci_name(dev));
+	else if (use_bitmap)
+		snprintf(gic->name, MANA_IRQ_NAME_SZ, "mana_p%dq%d@pci:%s",
+			 port_index, queue_index, pci_name(dev));
+	else
+		snprintf(gic->name, MANA_IRQ_NAME_SZ, "mana_q%d@pci:%s",
+			 queue_index, pci_name(dev));
+
+	err = request_irq(irq, mana_gd_intr, 0, gic->name, gic);
+	if (err) {
+		dev_err(gc->dev, "Failed to request irq %d %s\n",
+			irq, gic->name);
+		kfree(gic);
+		gic = NULL;
+		goto out;
+	}
+
+	refcount_set(&gic->refcount, 1);
+	xa_store(&gc->irq_contexts, msi, gic, GFP_KERNEL);
+
+	if (use_bitmap)
+		set_bit(msi, gc->msi_bitmap);
+
+out:
+	mutex_unlock(&gc->gic_mutex);
+	return gic;
+}
+EXPORT_SYMBOL_NS(gdma_get_gic, "NET_MANA");
+
 int mana_gd_alloc_res_map(u32 res_avail, struct gdma_resource *r)
 {
 	r->map = bitmap_zalloc(res_avail, GFP_KERNEL);
@@ -1473,17 +1663,11 @@ static int mana_gd_setup_dyn_irqs(struct pci_dev *pdev, int nvec)
 	 * further used in irq_setup()
 	 */
 	for (i = 1; i <= nvec; i++) {
-		gic = kzalloc(sizeof(*gic), GFP_KERNEL);
+		gic = gdma_get_gic(gc, false, 0, i, &i);
 		if (!gic) {
 			err = -ENOMEM;
 			goto free_irq;
 		}
-		gic->handler = mana_gd_process_eq_events;
-		INIT_LIST_HEAD(&gic->eq_list);
-		spin_lock_init(&gic->lock);
-
-		snprintf(gic->name, MANA_IRQ_NAME_SZ, "mana_q%d@pci:%s",
-			 i - 1, pci_name(pdev));
 
 		/* one pci vector is already allocated for HWC */
 		irqs[i - 1] = pci_irq_vector(pdev, i);
@@ -1491,12 +1675,6 @@ static int mana_gd_setup_dyn_irqs(struct pci_dev *pdev, int nvec)
 			err = irqs[i - 1];
 			goto free_current_gic;
 		}
-
-		err = request_irq(irqs[i - 1], mana_gd_intr, 0, gic->name, gic);
-		if (err)
-			goto free_current_gic;
-
-		xa_store(&gc->irq_contexts, i, gic, GFP_KERNEL);
 	}
 
 	/*
@@ -1523,14 +1701,8 @@ free_current_gic:
 free_irq:
 	for (i -= 1; i > 0; i--) {
 		irq = pci_irq_vector(pdev, i);
-		gic = xa_load(&gc->irq_contexts, i);
-		if (WARN_ON(!gic))
-			continue;
-
 		irq_update_affinity_hint(irq, NULL);
-		free_irq(irq, gic);
-		xa_erase(&gc->irq_contexts, i);
-		kfree(gic);
+		gdma_put_gic(gc, false, i);
 	}
 	kfree(irqs);
 	return err;
@@ -1551,34 +1723,11 @@ static int mana_gd_setup_irqs(struct pci_dev *pdev, int nvec)
 	start_irqs = irqs;
 
 	for (i = 0; i < nvec; i++) {
-		gic = kzalloc(sizeof(*gic), GFP_KERNEL);
+		gic = gdma_get_gic(gc, false, 0, i, &i);
 		if (!gic) {
 			err = -ENOMEM;
 			goto free_irq;
 		}
-
-		gic->handler = mana_gd_process_eq_events;
-		INIT_LIST_HEAD(&gic->eq_list);
-		spin_lock_init(&gic->lock);
-
-		if (!i)
-			snprintf(gic->name, MANA_IRQ_NAME_SZ, "mana_hwc@pci:%s",
-				 pci_name(pdev));
-		else
-			snprintf(gic->name, MANA_IRQ_NAME_SZ, "mana_q%d@pci:%s",
-				 i - 1, pci_name(pdev));
-
-		irqs[i] = pci_irq_vector(pdev, i);
-		if (irqs[i] < 0) {
-			err = irqs[i];
-			goto free_current_gic;
-		}
-
-		err = request_irq(irqs[i], mana_gd_intr, 0, gic->name, gic);
-		if (err)
-			goto free_current_gic;
-
-		xa_store(&gc->irq_contexts, i, gic, GFP_KERNEL);
 	}
 
 	/* If number of IRQ is one extra than number of online CPUs,
@@ -1607,19 +1756,11 @@ static int mana_gd_setup_irqs(struct pci_dev *pdev, int nvec)
 	kfree(start_irqs);
 	return 0;
 
-free_current_gic:
-	kfree(gic);
 free_irq:
 	for (i -= 1; i >= 0; i--) {
 		irq = pci_irq_vector(pdev, i);
-		gic = xa_load(&gc->irq_contexts, i);
-		if (WARN_ON(!gic))
-			continue;
-
 		irq_update_affinity_hint(irq, NULL);
-		free_irq(irq, gic);
-		xa_erase(&gc->irq_contexts, i);
-		kfree(gic);
+		gdma_put_gic(gc, false, i);
 	}
 
 	kfree(start_irqs);
@@ -1639,6 +1780,7 @@ static int mana_gd_setup_hwc_irqs(struct pci_dev *pdev)
 		/* Need 1 interrupt for HWC */
 		max_irqs = min(num_online_cpus(), MANA_MAX_NUM_QUEUES) + 1;
 		min_irqs = 2;
+		gc->msi_sharing = true;
 	}
 
 	nvec = pci_alloc_irq_vectors(pdev, min_irqs, max_irqs, PCI_IRQ_MSIX);
@@ -1693,26 +1835,17 @@ static int mana_gd_setup_remaining_irqs(struct pci_dev *pdev)
 static void mana_gd_remove_irqs(struct pci_dev *pdev)
 {
 	struct gdma_context *gc = pci_get_drvdata(pdev);
-	struct gdma_irq_context *gic;
 	int irq, i;
 
 	if (gc->max_num_msix < 1)
 		return;
 
-	for (i = 0; i < gc->max_num_msix; i++) {
-		irq = pci_irq_vector(pdev, i);
-		if (irq < 0)
-			continue;
-
-		gic = xa_load(&gc->irq_contexts, i);
-		if (WARN_ON(!gic))
-			continue;
-
+	for (i = 0; i < (gc->msi_sharing ? gc->max_num_msix : 1); i++) {
 		/* Need to clear the hint before free_irq */
+		irq = pci_irq_vector(pdev, i);
 		irq_update_affinity_hint(irq, NULL);
-		free_irq(irq, gic);
-		xa_erase(&gc->irq_contexts, i);
-		kfree(gic);
+
+		gdma_put_gic(gc, !gc->msi_sharing, i);
 	}
 
 	pci_free_irq_vectors(pdev);
@@ -1744,19 +1877,29 @@ static int mana_gd_setup(struct pci_dev *pdev)
 	if (err)
 		goto destroy_hwc;
 
+	err = mana_gd_detect_devices(pdev);
+	if (err)
+		goto destroy_hwc;
+
 	err = mana_gd_query_max_resources(pdev);
 	if (err)
 		goto destroy_hwc;
 
-	err = mana_gd_setup_remaining_irqs(pdev);
-	if (err) {
-		dev_err(gc->dev, "Failed to setup remaining IRQs: %d", err);
-		goto destroy_hwc;
+	if (!gc->msi_sharing) {
+		gc->msi_bitmap = bitmap_zalloc(gc->num_msix_usable, GFP_KERNEL);
+		if (!gc->msi_bitmap) {
+			err = -ENOMEM;
+			goto destroy_hwc;
+		}
+		// Set bit for HWC
+		set_bit(0, gc->msi_bitmap);
+	} else {
+		err = mana_gd_setup_remaining_irqs(pdev);
+		if (err) {
+			dev_err(gc->dev, "Failed to setup remaining IRQs: %d", err);
+			goto destroy_hwc;
+		}
 	}
-
-	err = mana_gd_detect_devices(pdev);
-	if (err)
-		goto destroy_hwc;
 
 	dev_dbg(&pdev->dev, "mana gdma setup successful\n");
 	return 0;
@@ -1819,6 +1962,7 @@ static int mana_gd_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 		goto release_region;
 
 	mutex_init(&gc->eq_test_event_mutex);
+	mutex_init(&gc->gic_mutex);
 	pci_set_drvdata(pdev, gc);
 	gc->bar0_pa = pci_resource_start(pdev, 0);
 

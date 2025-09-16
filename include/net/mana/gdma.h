@@ -267,8 +267,10 @@ struct gdma_event {
 
 struct gdma_queue;
 
+#define CQE_POLLING_BUFFER 512
 struct mana_eq {
 	struct gdma_queue	*eq;
+	struct gdma_comp cqe_poll[CQE_POLLING_BUFFER];
 	struct dentry		*mana_eq_debugfs;
 };
 
@@ -317,8 +319,14 @@ struct gdma_queue {
 			void *context;
 
 			unsigned int msix_index;
+			unsigned int irq;
 
 			u32 log2_throttle_limit;
+
+			/* NAPI data */
+			struct napi_struct napi;
+			int work_done;
+			int budget;
 		} eq;
 
 		struct {
@@ -343,6 +351,8 @@ struct gdma_queue_spec {
 
 			unsigned long log2_throttle_limit;
 			unsigned int msix_index;
+
+			struct net_device *ndev;
 		} eq;
 
 		struct {
@@ -363,6 +373,9 @@ struct gdma_irq_context {
 	spinlock_t lock;
 	struct list_head eq_list;
 	char name[MANA_IRQ_NAME_SZ];
+	unsigned int msi;
+	unsigned int irq;
+	refcount_t refcount;
 };
 
 struct gdma_context {
@@ -409,6 +422,10 @@ struct gdma_context {
 
 	/* Azure RDMA adapter */
 	struct gdma_dev		mana_ib;
+
+	struct mutex		gic_mutex;
+	bool msi_sharing;
+	unsigned long *msi_bitmap;
 };
 
 static inline bool mana_gd_is_mana(struct gdma_dev *gd)
@@ -564,6 +581,8 @@ enum {
 #define GDMA_DRV_CAP_FLAG_1_HANDLE_RECONFIG_EQE BIT(17)
 /* Driver supports dynamic MSI-X vector allocation */
 #define GDMA_DRV_CAP_FLAG_1_DYNAMIC_IRQ_ALLOC_SUPPORT BIT(13)
+/* Driver supports separate EQ/MSIs for each vPort */
+#define GDMA_DRV_CAP_FLAG_1_EQ_MSI_UNSHARE_MULTI_VPORT BIT(19)
 
 #define GDMA_DRV_CAP_FLAGS1 \
 	(GDMA_DRV_CAP_FLAG_1_EQ_SHARING_MULTI_VPORT | \
@@ -572,7 +591,8 @@ enum {
 	 GDMA_DRV_CAP_FLAG_1_VARIABLE_INDIRECTION_TABLE_SUPPORT | \
 	 GDMA_DRV_CAP_FLAG_1_DEV_LIST_HOLES_SUP | \
 	 GDMA_DRV_CAP_FLAG_1_HANDLE_RECONFIG_EQE | \
-	 GDMA_DRV_CAP_FLAG_1_DYNAMIC_IRQ_ALLOC_SUPPORT)
+	 GDMA_DRV_CAP_FLAG_1_DYNAMIC_IRQ_ALLOC_SUPPORT | \
+	 GDMA_DRV_CAP_FLAG_1_EQ_MSI_UNSHARE_MULTI_VPORT)
 
 #define GDMA_DRV_CAP_FLAGS2 0
 
@@ -902,4 +922,11 @@ int mana_gd_destroy_dma_region(struct gdma_context *gc, u64 dma_region_handle);
 void mana_register_debugfs(void);
 void mana_unregister_debugfs(void);
 
+struct gdma_irq_context *gdma_get_gic(struct gdma_context *gc, bool use_bitmap,
+				      u16 port_index, int queue_index,
+				      int *msi_requested);
+void gdma_put_gic(struct gdma_context *gc, bool use_bitmap, int msi);
+int mana_gd_query_device_cfg(struct gdma_context *gc, u32 proto_major_ver,
+			     u32 proto_minor_ver, u32 proto_micro_ver,
+			     u16 *max_num_vports);
 #endif /* _GDMA_H */
