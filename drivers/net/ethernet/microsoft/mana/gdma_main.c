@@ -279,6 +279,7 @@ static int mana_gd_create_hw_eq(struct gdma_context *gc,
 	queue->id = resp.queue_index;
 	queue->eq.disable_needed = true;
 	queue->mem_info.dma_region_handle = GDMA_INVALID_DMA_REGION;
+	trace_printk("eq id %d\n", queue->id);
 	return 0;
 }
 
@@ -451,6 +452,8 @@ static void mana_gd_process_eqe(struct gdma_queue *eq)
 	eqe_info.as_uint32 = eqe->eqe_info;
 	type = eqe_info.type;
 
+	trace_printk("event type %d eq id %d dev %d\n", type, eq->id, eq->gdma_dev->dev_id.as_uint32);
+
 	switch (type) {
 	case GDMA_EQE_COMPLETION:
 		cq_id = eqe->details[0] & 0xFFFFFF;
@@ -467,6 +470,7 @@ static void mana_gd_process_eqe(struct gdma_queue *eq)
 		break;
 
 	case GDMA_EQE_TEST_EVENT:
+		trace_printk("test event eq id %d dev %d\n", eq->id, eq->gdma_dev->dev_id.as_uint32);
 		gc->test_event_eq_id = eq->id;
 		complete(&gc->eq_test_event);
 		break;
@@ -539,11 +543,16 @@ static void mana_gd_process_eq_events(void *arg)
 		owner_bits = eqe_info.owner_bits;
 
 		old_bits = (eq->head / num_eqe - 1) & GDMA_EQE_OWNER_MASK;
+		trace_printk("eq id %d head %d old_bits %x owner_bits %x\n", eq->id, eq->head, old_bits, owner_bits);
 		/* No more entries */
 		if (owner_bits == old_bits) {
 			/* return here without ringing the doorbell */
-			if (!mana_gd_is_mana(eq->gdma_dev) && i == 0)
+			if (i == 0) {
+				if (mana_gd_is_mana(eq->gdma_dev))
+					napi_complete_done(&eq->eq.napi, 0);
+				trace_printk("eq id %d dev %d head %d no eqe return\n", eq->id, eq->gdma_dev->dev_id.as_uint32, eq->head);
 				return;
+			}
 			break;
 		}
 
@@ -602,6 +611,8 @@ static void mana_gd_process_eq_events(void *arg)
 				      head, arm_bit);
 		eq->eq.eqe_done_since_doorbell = 0;
 	}
+
+	trace_printk("eq id %d dev %d return i %d head %d\n", eq->id, eq->gdma_dev->dev_id.as_uint32, i, eq->head);
 }
 
 int mana_poll(struct napi_struct *napi, int budget)
@@ -629,6 +640,8 @@ static void gic_handler(void *arg)
 {
 	struct gdma_queue *eq = arg;
 	struct gdma_dev *dev = eq->gdma_dev;
+
+	trace_printk("eq id %d dev_id %d\n", eq->id, eq->gdma_dev->dev_id.as_uint32);
 
 	if (mana_gd_is_mana(dev))
 		mana_gd_schedule_napi(eq);
@@ -734,6 +747,8 @@ int mana_gd_test_eq(struct gdma_context *gc, struct gdma_queue *eq)
 	req.hdr.dev_id = eq->gdma_dev->dev_id;
 	req.queue_index = eq->id;
 
+	trace_printk("eq id %d dev %d\n", eq->id, eq->gdma_dev->dev_id.as_uint32);
+
 	err = mana_gd_send_request(gc, sizeof(req), &req, sizeof(resp), &resp);
 	if (err) {
 		dev_err(dev, "test_eq failed: %d\n", err);
@@ -801,6 +816,7 @@ static int mana_gd_create_eq(struct gdma_dev *gd,
 		return -EINVAL;
 	}
 
+	queue->head |= INITIALIZED_OWNER_BIT(log2_num_entries);
 	err = mana_gd_register_irq(queue, spec);
 	if (err) {
 		dev_err(dev, "Failed to register irq: %d\n", err);
@@ -809,7 +825,6 @@ static int mana_gd_create_eq(struct gdma_dev *gd,
 
 	queue->eq.callback = spec->eq.callback;
 	queue->eq.context = spec->eq.context;
-	queue->head |= INITIALIZED_OWNER_BIT(log2_num_entries);
 	queue->eq.log2_throttle_limit = spec->eq.log2_throttle_limit ?: 1;
 
 	if (create_hwq) {
@@ -1481,6 +1496,8 @@ void gdma_put_gic(struct gdma_context *gc, bool use_bitmap, int msi)
 		return;
 	}
 
+	printk(KERN_ERR "%s: gic %s ref %d msi %d irq %d\n", __func__, gic->name, refcount_read(&gic->refcount), gic->msi, gic->irq);
+
 	if (!refcount_dec_and_test(&gic->refcount))
 		goto clear_bitmap;
 
@@ -1584,6 +1601,7 @@ struct gdma_irq_context *gdma_get_gic(struct gdma_context *gc, bool use_bitmap,
 		set_bit(msi, gc->msi_bitmap);
 
 out:
+	printk(KERN_ERR "%s: gic %s ref %d msi %d irq %d\n", __func__, gic->name, refcount_read(&gic->refcount), gic->msi, gic->irq);
 	mutex_unlock(&gc->gic_mutex);
 	return gic;
 }
