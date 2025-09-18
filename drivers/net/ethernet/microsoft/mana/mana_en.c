@@ -1323,8 +1323,7 @@ int mana_create_eq(struct mana_port_context *apc)
 		if (gc->msi_sharing)
 			spec.eq.msix_index = (i + 1) % gc->num_msix_usable;
 
-		gic = gdma_get_gic(gc, !gc->msi_sharing, apc->port_idx, i,
-				   &spec.eq.msix_index);
+		gic = gdma_get_gic(gc, !gc->msi_sharing, &spec.eq.msix_index);
 		if (!gic)
 			goto out;
 

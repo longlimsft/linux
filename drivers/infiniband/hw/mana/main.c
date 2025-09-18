@@ -749,7 +749,7 @@ int mana_ib_create_eqs(struct mana_ib_dev *mdev)
 	spec.eq.log2_throttle_limit = LOG2_EQ_THROTTLE;
 	spec.eq.msix_index = 0;
 
-	gic = gdma_get_gic(gc, false, 0, 0, &spec.eq.msix_index);
+	gic = gdma_get_gic(gc, false, &spec.eq.msix_index);
 	if (!gic)
 		return -ENOMEM;
 
@@ -769,7 +769,7 @@ int mana_ib_create_eqs(struct mana_ib_dev *mdev)
 	for (i = 0; i < mdev->ib_dev.num_comp_vectors; i++) {
 		spec.eq.msix_index = (i + 1) % gc->num_msix_usable;
 
-		gic = gdma_get_gic(gc, false, 0, i, &spec.eq.msix_index);
+		gic = gdma_get_gic(gc, false, &spec.eq.msix_index);
 		if (!gic)
 			goto destroy_eqs;
 

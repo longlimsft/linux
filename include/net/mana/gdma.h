@@ -926,7 +926,6 @@ void mana_register_debugfs(void);
 void mana_unregister_debugfs(void);
 
 struct gdma_irq_context *gdma_get_gic(struct gdma_context *gc, bool use_bitmap,
-				      u16 port_index, int queue_index,
 				      int *msi_requested);
 void gdma_put_gic(struct gdma_context *gc, bool use_bitmap, int msi);
 int mana_gd_query_device_cfg(struct gdma_context *gc, u32 proto_major_ver,

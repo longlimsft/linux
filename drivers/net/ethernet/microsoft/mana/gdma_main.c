@@ -1495,7 +1495,6 @@ clear_bitmap:
 EXPORT_SYMBOL_NS(gdma_put_gic, "NET_MANA");
 
 struct gdma_irq_context *gdma_get_gic(struct gdma_context *gc, bool use_bitmap,
-				      u16 port_index, int queue_index,
 				      int *msi_requested)
 {
 	struct gdma_irq_context *gic;
@@ -1551,12 +1550,9 @@ struct gdma_irq_context *gdma_get_gic(struct gdma_context *gc, bool use_bitmap,
 	if (!gic->msi)
 		snprintf(gic->name, MANA_IRQ_NAME_SZ, "mana_hwc@pci:%s",
 			 pci_name(dev));
-	else if (use_bitmap)
-		snprintf(gic->name, MANA_IRQ_NAME_SZ, "mana_p%dq%d@pci:%s",
-			 port_index, queue_index, pci_name(dev));
 	else
-		snprintf(gic->name, MANA_IRQ_NAME_SZ, "mana_q%d@pci:%s",
-			 queue_index, pci_name(dev));
+		snprintf(gic->name, MANA_IRQ_NAME_SZ, "mana_msi%d@pci:%s",
+			 gic->msi, pci_name(dev));
 
 	err = request_irq(irq, mana_gd_intr, 0, gic->name, gic);
 	if (err) {
@@ -1694,7 +1690,7 @@ static int mana_gd_setup_dyn_irqs(struct pci_dev *pdev, int nvec)
 	 * further used in irq_setup()
 	 */
 	for (i = 1; i <= nvec; i++) {
-		gic = gdma_get_gic(gc, false, 0, i, &i);
+		gic = gdma_get_gic(gc, false, &i);
 		if (!gic) {
 			err = -ENOMEM;
 			goto free_irq;
@@ -1754,7 +1750,7 @@ static int mana_gd_setup_irqs(struct pci_dev *pdev, int nvec)
 	start_irqs = irqs;
 
 	for (i = 0; i < nvec; i++) {
-		gic = gdma_get_gic(gc, false, 0, i, &i);
+		gic = gdma_get_gic(gc, false, &i);
 		if (!gic) {
 			err = -ENOMEM;
 			goto free_irq;
