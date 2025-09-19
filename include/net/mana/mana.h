@@ -113,8 +113,6 @@ struct mana_txq {
 
 	atomic_t pending_sends;
 
-	bool napi_initialized;
-
 	struct mana_stats_tx stats;
 };
 

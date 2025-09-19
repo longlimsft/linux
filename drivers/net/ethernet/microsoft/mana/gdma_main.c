@@ -737,8 +737,8 @@ static int mana_gd_register_irq(struct gdma_queue *queue,
 		return -EINVAL;
 
 	if (mana_gd_is_mana(gd)) {
-		netif_napi_add(spec->eq.ndev, &queue->eq.napi, mana_poll);
-		napi_enable(&queue->eq.napi);
+		netif_napi_add_locked(spec->eq.ndev, &queue->eq.napi, mana_poll);
+		napi_enable_locked(&queue->eq.napi);
 	}
 
 	spin_lock_irqsave(&gic->lock, flags);
@@ -771,8 +771,8 @@ static void mana_gd_deregister_irq(struct gdma_queue *queue)
 		return;
 
 	if (mana_gd_is_mana(gd)) {
-		napi_disable(&queue->eq.napi);
-		netif_napi_del(&queue->eq.napi);
+		napi_disable_locked(&queue->eq.napi);
+		netif_napi_del_locked(&queue->eq.napi);
 		page_pool_destroy(queue->eq.page_pool);
 	}
 
@@ -784,7 +784,6 @@ static void mana_gd_deregister_irq(struct gdma_queue *queue)
 		}
 	}
 	spin_unlock_irqrestore(&gic->lock, flags);
-
 	synchronize_rcu();
 }
 
