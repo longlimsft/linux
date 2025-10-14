@@ -607,7 +607,7 @@ static int mana_gd_process_eq_events(void *arg)
 	struct gdma_context *gc;
 	struct gdma_eqe *eqe;
 	u32 head, num_eqe;
-	u8 arm_bit = 0;
+	u8 arm_bit;
 	bool ring;
 	int work_done = 0;
 	int i;
@@ -672,6 +672,8 @@ static int mana_gd_process_eq_events(void *arg)
 	 * Always rearm the EQ for non-MANA device (HWC and RDMA). For MANA,
 	 * rearm it when NAPI is done.
 	 */
+	ring = false;
+	arm_bit = 0;
 	if (mana_gd_is_mana(eq->gdma_dev)) {
 		ring = eq->eq.eqe_done_since_doorbell > eq->queue_size / GDMA_EQE_SIZE * 4;
 		if (ring)
@@ -906,6 +908,7 @@ static int mana_gd_create_eq(struct gdma_dev *gd,
 	 * value before making the call to mana_gd_register_irq()
 	 */
 	queue->head |= INITIALIZED_OWNER_BIT(log2_num_entries);
+	mb();
 	err = mana_gd_register_irq(queue, spec);
 	if (err) {
 		dev_err(dev, "Failed to register irq: %d\n", err);
