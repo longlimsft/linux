@@ -284,7 +284,7 @@ struct gdma_event {
 
 struct gdma_queue;
 
-#define CQE_POLLING_BUFFER 512
+#define CQE_POLLING_BUFFER 16
 struct mana_eq {
 	struct gdma_queue	*eq;
 	struct gdma_comp cqe_poll[CQE_POLLING_BUFFER];
