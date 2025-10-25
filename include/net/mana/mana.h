@@ -113,8 +113,6 @@ struct mana_txq {
 
 	atomic_t pending_sends;
 
-	bool napi_initialized;
-
 	struct mana_stats_tx stats;
 };
 
@@ -265,8 +263,6 @@ struct mana_tx_comp_oob {
 
 struct mana_rxq;
 
-#define CQE_POLLING_BUFFER 512
-
 struct mana_cq {
 	struct gdma_queue *gdma_cq;
 
@@ -286,14 +282,10 @@ struct mana_cq {
 	 */
 	struct mana_txq *txq;
 
-	/* Buffer which the CQ handler can copy the CQE's into. */
-	struct gdma_comp gdma_comp_buf[CQE_POLLING_BUFFER];
+	/* Pointer to a buffer which the CQ handler can copy the CQE's into. */
+	struct gdma_comp *gdma_comp_buf;
 
-	/* NAPI data */
-	struct napi_struct napi;
-	int work_done;
-	int work_done_since_doorbell;
-	int budget;
+	int cqe_done_since_doorbell;
 };
 
 struct mana_recv_buf_oob {
@@ -473,9 +465,6 @@ struct mana_context {
 	u16 num_ports;
 	u8 bm_hostmode;
 
-	struct mana_eq *eqs;
-	struct dentry *mana_eqs_debugfs;
-
 	struct net_device *ports[MAX_PORTS_IN_MANA_DEV];
 };
 
@@ -484,6 +473,9 @@ struct mana_port_context {
 	struct net_device *ndev;
 
 	u8 mac_addr[ETH_ALEN];
+
+	struct mana_eq *eqs;
+	struct dentry *mana_eqs_debugfs;
 
 	enum TRI_STATE rss_state;
 
@@ -1008,6 +1000,8 @@ void mana_destroy_wq_obj(struct mana_port_context *apc, u32 wq_type,
 int mana_cfg_vport(struct mana_port_context *apc, u32 protection_dom_id,
 		   u32 doorbell_pg_id);
 void mana_uncfg_vport(struct mana_port_context *apc);
+int mana_create_eq(struct mana_port_context *apc);
+void mana_destroy_eq(struct mana_port_context *apc);
 
 struct net_device *mana_get_primary_netdev(struct mana_context *ac,
 					   u32 port_index,
