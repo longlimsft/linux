@@ -128,6 +128,8 @@ int mana_ib_dealloc_pd(struct ib_pd *ibpd, struct ib_udata *udata)
 	struct gdma_context *gc;
 	int err;
 
+	trace_printk("%d\n", __LINE__);
+
 	dev = container_of(ibdev, struct mana_ib_dev, ib_dev);
 	gc = mdev_to_gc(dev);
 

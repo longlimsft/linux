@@ -463,6 +463,8 @@ static void mana_serv_reset(struct pci_dev *pdev)
 	hwc->hwc_timeout = 0;
 
 	dev_info(&pdev->dev, "MANA reset cycle start\n");
+	gc->reset_in_progress = true;
+	trace_printk("gc->reset_in_progress = true\n");
 
 	mana_gd_suspend(pdev, PMSG_SUSPEND);
 
@@ -471,6 +473,8 @@ static void mana_serv_reset(struct pci_dev *pdev)
 	mana_gd_resume(pdev);
 
 	dev_info(&pdev->dev, "MANA reset cycle completed\n");
+	gc->reset_in_progress = false;
+	trace_printk("gc->reset_in_progress = false\n");
 
 out:
 	gc->in_service = false;

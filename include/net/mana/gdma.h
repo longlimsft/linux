@@ -455,6 +455,9 @@ struct gdma_context {
 
 	/* Bitmap tracks where MSI is allocated when it is not shared for EQs */
 	unsigned long *msi_bitmap;
+
+	/* Reset mode */
+	bool reset_in_progress;
 };
 
 static inline bool mana_gd_is_mana(struct gdma_dev *gd)

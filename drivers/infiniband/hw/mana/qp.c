@@ -891,6 +891,8 @@ int mana_ib_destroy_qp(struct ib_qp *ibqp, struct ib_udata *udata)
 {
 	struct mana_ib_qp *qp = container_of(ibqp, struct mana_ib_qp, ibqp);
 
+	trace_printk("%d\n", __LINE__);
+
 	switch (ibqp->qp_type) {
 	case IB_QPT_RAW_PACKET:
 		if (ibqp->rwq_ind_tbl)

@@ -77,6 +77,7 @@ static int mana_ib_netdev_event(struct notifier_block *this,
 	struct gdma_context *gc = dev->gdma_dev->gdma_context;
 	struct mana_context *mc = gc->mana.driver_data;
 	struct net_device *ndev;
+	struct ib_event ibev;
 	int i;
 
 	/* Only process events from our parent device */
@@ -97,7 +98,18 @@ static int mana_ib_netdev_event(struct notifier_block *this,
 					netdev_put(ndev, &dev->dev_tracker);
 
 				return NOTIFY_OK;
+
+			case NETDEV_CHANGE:
+				ibev.device = &dev->ib_dev;
+				ibev.element.port_num = i + 1;
+				ibev.event = gc->reset_in_progress ? IB_EVENT_PORT_ERR : IB_EVENT_PORT_ACTIVE;
+
+				ib_dispatch_event(&ibev);
+
+				return NOTIFY_OK;
+
 			default:
+				trace_printk("port %d event=%ld\n", i, event);
 				return NOTIFY_DONE;
 			}
 		}

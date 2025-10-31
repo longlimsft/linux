@@ -128,6 +128,8 @@ static int uverbs_destroy_uobject(struct ib_uobject *uobj,
 	unsigned long flags;
 	int ret;
 
+	trace_dump_stack(0);
+
 	lockdep_assert_held(&ufile->hw_destroy_rwsem);
 	assert_uverbs_usecnt(uobj, UVERBS_LOOKUP_WRITE);
 
@@ -136,6 +138,7 @@ static int uverbs_destroy_uobject(struct ib_uobject *uobj,
 		WARN_ON(!uobj->context);
 		uobj->uapi_object->type_class->alloc_abort(uobj);
 	} else if (uobj->object) {
+		trace_printk("%d\n", __LINE__);
 		ret = uobj->uapi_object->type_class->destroy_hw(uobj, reason,
 								attrs);
 		if (ret)
@@ -154,8 +157,10 @@ static int uverbs_destroy_uobject(struct ib_uobject *uobj,
 	 */
 	if (reason != RDMA_REMOVE_DESTROY)
 		atomic_set(&uobj->usecnt, 0);
-	else
+	else {
+		trace_printk("%d\n", __LINE__);
 		uobj->uapi_object->type_class->remove_handle(uobj);
+	}
 
 	if (!list_empty(&uobj->list)) {
 		spin_lock_irqsave(&ufile->uobjects_lock, flags);

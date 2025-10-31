@@ -117,6 +117,8 @@ struct ib_mr *mana_ib_reg_user_mr(struct ib_pd *ibpd, u64 start, u64 length,
 	u64 dma_region_handle;
 	int err;
 
+	trace_printk("%d\n", __LINE__);
+
 	if (dmah)
 		return ERR_PTR(-EOPNOTSUPP);
 
@@ -203,6 +205,8 @@ struct ib_mr *mana_ib_reg_user_mr_dmabuf(struct ib_pd *ibpd, u64 start, u64 leng
 	struct mana_ib_mr *mr;
 	u64 dma_region_handle;
 	int err;
+
+	trace_printk("%d\n", __LINE__);
 
 	if (dmah)
 		return ERR_PTR(-EOPNOTSUPP);
@@ -301,6 +305,8 @@ int mana_ib_dereg_mr(struct ib_mr *ibmr, struct ib_udata *udata)
 	struct ib_device *ibdev = ibmr->device;
 	struct mana_ib_dev *dev;
 	int err;
+
+	trace_printk("%d\n", __LINE__);
 
 	dev = container_of(ibdev, struct mana_ib_dev, ib_dev);
 
