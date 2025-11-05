@@ -387,6 +387,28 @@ EXPORT_SYMBOL_NS(mana_gd_ring_cq, "NET_MANA");
 
 #define MANA_SERVICE_PERIOD 10
 
+static void mana_serv_rescan(struct pci_dev *pdev)
+{
+	struct pci_bus *parent;
+
+	pci_lock_rescan_remove();
+
+	parent = pdev->bus;
+	if (!parent) {
+		dev_err(&pdev->dev, "MANA service: no parent bus\n");
+		goto out;
+	}
+
+	pci_stop_and_remove_bus_device(pdev);
+
+	msleep(MANA_SERVICE_PERIOD * 1000);
+
+	pci_rescan_bus(parent);
+
+out:
+	pci_unlock_rescan_remove();
+}
+
 static void mana_serv_fpga(struct pci_dev *pdev)
 {
 	struct pci_bus *bus, *parent;
@@ -419,9 +441,12 @@ static void mana_serv_reset(struct pci_dev *pdev)
 {
 	struct gdma_context *gc = pci_get_drvdata(pdev);
 	struct hw_channel_context *hwc;
+	int ret;
 
 	if (!gc) {
-		dev_err(&pdev->dev, "MANA service: no GC\n");
+		/* Perform PCI rescan on device if GC is not set up */
+		dev_err(&pdev->dev, "MANA service: GC not setup, rescanning\n");
+		mana_serv_rescan(pdev);
 		return;
 	}
 
@@ -440,9 +465,18 @@ static void mana_serv_reset(struct pci_dev *pdev)
 
 	msleep(MANA_SERVICE_PERIOD * 1000);
 
-	mana_gd_resume(pdev);
+	ret = mana_gd_resume(pdev);
+	if (ret == -ETIMEDOUT || ret == -EPROTO) {
+		/* Perform PCI rescan on device if we failed on HWC */
+		dev_err(&pdev->dev, "MANA service: resume failed, rescanning\n");
+		mana_serv_rescan(pdev);
+		goto out;
+	}
 
-	dev_info(&pdev->dev, "MANA reset cycle completed\n");
+	if (ret)
+		dev_info(&pdev->dev, "MANA reset cycle failed err %d\n", ret);
+	else
+		dev_info(&pdev->dev, "MANA reset cycle completed\n");
 
 out:
 	gc->in_service = false;
@@ -457,10 +491,12 @@ struct mana_serv_work {
 static void mana_serv_func(struct work_struct *w)
 {
 	struct mana_serv_work *mns_wk;
+	struct gdma_context *gc;
 	struct pci_dev *pdev;
 
 	mns_wk = container_of(w, struct mana_serv_work, serv_work);
 	pdev = mns_wk->pdev;
+	gc = pci_get_drvdata(pdev);
 
 	if (!pdev)
 		goto out;
@@ -483,7 +519,10 @@ static void mana_serv_func(struct work_struct *w)
 out:
 	pci_dev_put(pdev);
 	kfree(mns_wk);
-	module_put(THIS_MODULE);
+
+	/* Drop module reference if this event is from GC/HWC interrupt */
+	if (gc)
+		module_put(THIS_MODULE);
 }
 
 static void mana_gd_process_eqe(struct gdma_queue *eq)
@@ -1936,10 +1975,12 @@ static int mana_gd_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	err = mana_probe(&gc->mana, false);
 	if (err)
 		goto cleanup_gd;
+	WRITE_ONCE(gc->mana_probed, true);
 
 	err = mana_rdma_probe(&gc->mana_ib);
 	if (err)
 		goto cleanup_mana;
+	WRITE_ONCE(gc->mana_rdma_probed, true);
 
 	return 0;
 
@@ -1966,6 +2007,27 @@ release_region:
 disable_dev:
 	pci_disable_device(pdev);
 	dev_err(&pdev->dev, "gdma probe failed: err = %d\n", err);
+
+	/*
+	 * Hardware could be in recovery mode and the HWC returns TIMEDOUT or
+	 * EPROTO from mana_gd_setup(), mana_probe() or mana_rdma_probe(). In
+	 * this case, perform the device recovery procedure.
+	 */
+	if (err == -ETIMEDOUT || err == -EPROTO) {
+		struct mana_serv_work *mns_wk;
+
+		mns_wk = kzalloc(sizeof(*mns_wk), GFP_ATOMIC);
+		if (mns_wk) {
+			dev_info(&pdev->dev, "Start MANA recovery mode\n");
+
+			mns_wk->pdev = pci_dev_get(pdev);
+			mns_wk->type = GDMA_EQE_HWC_RESET_REQUEST;
+
+			INIT_WORK(&mns_wk->serv_work, mana_serv_func);
+			schedule_work(&mns_wk->serv_work);
+		}
+	}
+
 	return err;
 }
 
@@ -1999,8 +2061,11 @@ int mana_gd_suspend(struct pci_dev *pdev, pm_message_t state)
 {
 	struct gdma_context *gc = pci_get_drvdata(pdev);
 
-	mana_rdma_remove(&gc->mana_ib);
-	mana_remove(&gc->mana, true);
+	if (READ_ONCE(gc->mana_rdma_probed))
+		mana_rdma_remove(&gc->mana_ib);
+
+	if (READ_ONCE(gc->mana_probed))
+		mana_remove(&gc->mana, true);
 
 	mana_gd_cleanup(pdev);
 
