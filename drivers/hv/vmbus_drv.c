@@ -2284,6 +2284,7 @@ static void __maybe_unused vmbus_reserve_fb(void)
 		if (IS_ENABLED(CONFIG_SYSFB)) {
 			start = screen_info.lfb_base;
 			size = max_t(__u32, screen_info.lfb_size, 0x800000);
+			printk(KERN_ERR "LL %s: lfb_base %x lfb_size %x\n", __func__, screen_info.lfb_base, screen_info.lfb_size);
 		}
 	} else {
 		/* Gen1 VM: get FB base from PCI */
@@ -2407,6 +2408,8 @@ int vmbus_allocate_mmio(struct resource **new, struct hv_device *device_obj,
 
 exit:
 	mutex_unlock(&hyperv_mmio_lock);
+	if (*new)
+		printk(KERN_ERR "LL %s: resource start %llx end %llx size %llx fb_overlap_ok %d\n", __func__, (*new)->start, (*new)->end, size, fb_overlap_ok);
 	return retval;
 }
 EXPORT_SYMBOL_GPL(vmbus_allocate_mmio);

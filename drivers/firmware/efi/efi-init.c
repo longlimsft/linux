@@ -68,6 +68,8 @@ static void __init init_screen_info(void)
 {
 	struct screen_info *si;
 
+	printk(KERN_ERR "LL %s:%d screen_info base %x size %x screen_info_table %lx\n", __func__, __LINE__, screen_info.lfb_base, screen_info.lfb_size, screen_info_table);
+
 	if (screen_info_table != EFI_INVALID_TABLE_ADDR) {
 		si = early_memremap(screen_info_table, sizeof(*si));
 		if (!si) {
@@ -84,7 +86,13 @@ static void __init init_screen_info(void)
 
 		if (IS_ENABLED(CONFIG_EFI_EARLYCON))
 			efi_earlycon_reprobe();
+	} else if (!screen_info.lfb_base) {
+		printk(KERN_ERR "LL %s:%d screen_info base %x size %x\n", __func__, __LINE__, screen_info.lfb_base, screen_info.lfb_size);
+		screen_info.lfb_base = 0x40000000;
+		screen_info.lfb_size = 0x300000;
 	}
+
+	printk(KERN_ERR "LL %s:%d screen_info base %x size %x\n", __func__, __LINE__, screen_info.lfb_base, screen_info.lfb_size);
 }
 
 static int __init uefi_init(u64 efi_system_table)

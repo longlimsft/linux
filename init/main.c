@@ -115,6 +115,8 @@
 
 #include <kunit/test.h>
 
+#include <linux/screen_info.h>
+
 static int kernel_init(void *);
 
 /*
@@ -899,10 +901,14 @@ void start_kernel(void)
 	char *command_line;
 	char *after_dashes;
 
+	printk(KERN_ERR "LL %s:%d screen_info base %x size %x address %px\n", __func__, __LINE__, screen_info.lfb_base, screen_info.lfb_size, &screen_info);
+
 	set_task_stack_end_magic(&init_task);
 	smp_setup_processor_id();
 	debug_objects_early_init();
 	init_vmlinux_build_id();
+
+	printk(KERN_ERR "LL %s:%d screen_info base %x size %x address %px\n", __func__, __LINE__, screen_info.lfb_base, screen_info.lfb_size, &screen_info);
 
 	cgroup_init_early();
 
@@ -914,6 +920,9 @@ void start_kernel(void)
 	 * enable them.
 	 */
 	boot_cpu_init();
+
+	printk(KERN_ERR "LL %s:%d screen_info base %x size %x\n", __func__, __LINE__, screen_info.lfb_base, screen_info.lfb_size);
+
 	page_address_init();
 	pr_notice("%s", linux_banner);
 	setup_arch(&command_line);

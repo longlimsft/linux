@@ -638,7 +638,7 @@ static const efi_config_table_type_t common_tables[] __initconst = {
 	{LINUX_EFI_UNACCEPTED_MEM_TABLE_GUID,	&efi.unaccepted,	"Unaccepted"	},
 #endif
 #ifdef CONFIG_EFI_GENERIC_STUB
-	{LINUX_EFI_SCREEN_INFO_TABLE_GUID,	&screen_info_table			},
+	{LINUX_EFI_SCREEN_INFO_TABLE_GUID,	&screen_info_table,	"screen_info"	},
 #endif
 	{},
 };
@@ -712,6 +712,7 @@ int __init efi_config_parse_tables(const efi_config_table_t *config_tables,
 		if (!IS_ENABLED(CONFIG_X86)) {
 			guid = &config_tables[i].guid;
 			table = (unsigned long)config_tables[i].table;
+			printk(KERN_ERR "%s: %d using config_tables\n", __func__, __LINE__);
 		} else if (efi_enabled(EFI_64BIT)) {
 			guid = &tbl64[i].guid;
 			table = tbl64[i].table;
@@ -725,6 +726,7 @@ int __init efi_config_parse_tables(const efi_config_table_t *config_tables,
 		} else {
 			guid = &tbl32[i].guid;
 			table = tbl32[i].table;
+			printk(KERN_ERR "%s: %d using tbl32\n", __func__, __LINE__);
 		}
 
 		if (!match_config_table(guid, table, common_tables) && arch_tables)

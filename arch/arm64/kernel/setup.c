@@ -286,6 +286,8 @@ void __init __no_sanitize_address setup_arch(char **cmdline_p)
 
 	kaslr_init();
 
+	printk(KERN_ERR "LL %s:%d screen_info base %x size %x\n", __func__, __LINE__, screen_info.lfb_base, screen_info.lfb_size);
+
 	early_fixmap_init();
 	early_ioremap_init();
 
@@ -319,6 +321,8 @@ void __init __no_sanitize_address setup_arch(char **cmdline_p)
 	 */
 	cpu_uninstall_idmap();
 
+	printk(KERN_ERR "LL %s:%d screen_info base %x size %x\n", __func__, __LINE__, screen_info.lfb_base, screen_info.lfb_size);
+
 	xen_early_init();
 	efi_init();
 
@@ -328,6 +332,8 @@ void __init __no_sanitize_address setup_arch(char **cmdline_p)
 		WARN_TAINT(mmu_enabled_at_boot, TAINT_FIRMWARE_WORKAROUND,
 			   FW_BUG "Booted with MMU enabled!");
 	}
+
+	printk(KERN_ERR "LL %s:%d screen_info base %x size %x\n", __func__, __LINE__, screen_info.lfb_base, screen_info.lfb_size);
 
 	arm64_memblock_init();
 
