@@ -2118,6 +2118,11 @@ static void mana_cq_handler(void *context, struct gdma_queue *gdma_queue)
 		 */
 		mana_gd_ring_cq(gdma_queue, 0);
 		cq->cqe_done_since_doorbell = 0;
+	} else if (cq->cqe_done_since_doorbell >  CQE_POLLING_BUFFER * 4 ) {
+		//HACK arm the CQ and move on to next EQE
+		eq->eq.work_done = 0;
+		mana_gd_ring_cq(gdma_queue, SET_ARM_BIT);
+		cq->cqe_done_since_doorbell = 0;
 	}
 }
 
