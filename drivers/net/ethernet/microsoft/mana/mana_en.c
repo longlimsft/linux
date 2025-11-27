@@ -2065,6 +2065,9 @@ static void mana_poll_rx_cq(struct mana_cq *cq)
 	struct gdma_comp *comp = cq->gdma_comp_buf;
 	struct mana_rxq *rxq = cq->rxq;
 	int comp_read, i;
+	struct gdma_context *gc;
+	
+	gc = rxq->gdma_rq->gdma_dev->gdma_context;
 
 	comp_read = mana_gd_poll_cq(cq->gdma_cq, comp, CQE_POLLING_BUFFER);
 	WARN_ON_ONCE(comp_read > CQE_POLLING_BUFFER);
@@ -2081,13 +2084,14 @@ static void mana_poll_rx_cq(struct mana_cq *cq)
 			return;
 
 		mana_process_rx_cqe(rxq, cq, &comp[i]);
+
+		/* ring the wq every RING_WQ_MAX CQEs */
+		if (i % RING_WQ_MAX == 0)
+			mana_gd_wq_ring_doorbell(gc, rxq->gdma_rq);
 	}
 
-	if (comp_read > 0) {
-		struct gdma_context *gc = rxq->gdma_rq->gdma_dev->gdma_context;
-
+	if (comp_read > 0)
 		mana_gd_wq_ring_doorbell(gc, rxq->gdma_rq);
-	}
 
 	if (rxq->xdp_flush)
 		xdp_do_flush();
@@ -2109,17 +2113,9 @@ static void mana_cq_handler(void *context, struct gdma_queue *gdma_queue)
 	if (eq->eq.work_done < eq->eq.budget) {
 		mana_gd_ring_cq(gdma_queue, SET_ARM_BIT);
 		cq->cqe_done_since_doorbell = 0;
-	} else if (cq->cqe_done_since_doorbell >
-		   cq->gdma_cq->queue_size / COMP_ENTRY_SIZE * 4) {
-		/* MANA hardware requires at least one doorbell ring every 8
-		 * wraparounds of CQ even if there is no need to arm the CQ.
-		 * This driver rings the doorbell as soon as we have exceeded
-		 * 4 wraparounds.
-		 */
-		mana_gd_ring_cq(gdma_queue, 0);
-		cq->cqe_done_since_doorbell = 0;
-	} else if (cq->cqe_done_since_doorbell >  CQE_POLLING_BUFFER * 4 ) {
-		//HACK arm the CQ and move on to next EQE
+	} else if (cq->cqe_done_since_doorbell > CQE_POLLING_BUFFER ||
+		   cq->cqe_done_since_doorbell > cq->gdma_cq->queue_size / COMP_ENTRY_SIZE * 4) {
+		// Arm the CQ and move on to next EQE
 		eq->eq.work_done = 0;
 		mana_gd_ring_cq(gdma_queue, SET_ARM_BIT);
 		cq->cqe_done_since_doorbell = 0;
