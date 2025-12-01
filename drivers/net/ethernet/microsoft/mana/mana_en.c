@@ -2080,6 +2080,7 @@ static int mana_cq_handler(void *context, struct gdma_queue *gdma_queue)
 {
 	struct mana_cq *cq = context;
 	int w;
+	struct gdma_queue *eq;
 
 	WARN_ON_ONCE(cq->gdma_cq != gdma_queue);
 
@@ -2091,7 +2092,11 @@ static int mana_cq_handler(void *context, struct gdma_queue *gdma_queue)
 	w = cq->work_done;
 	cq->work_done_since_doorbell += w;
 
+	eq = gdma_queue->cq.parent;
+	trace_printk("eq id %d cq %s work_done %d\n", eq->id, cq->type == MANA_CQ_TYPE_RX ? "rx" : "tx", w);
+
 	if (w < cq->budget) {
+		trace_printk("eq id %d cq %s arm\n", eq->id, cq->type == MANA_CQ_TYPE_RX ? "rx" : "tx");
 		mana_gd_ring_cq(gdma_queue, SET_ARM_BIT);
 		cq->work_done_since_doorbell = 0;
 		napi_complete_done(&cq->napi, w);
