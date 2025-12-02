@@ -2113,6 +2113,8 @@ static void mana_cq_handler(void *context, struct gdma_queue *gdma_queue)
 
 	trace_printk("eq id %d cq %s work_done %d budget %d\n", eq->id, cq->type == MANA_CQ_TYPE_RX ? "rx" : "tx", eq->eq.work_done, eq->eq.budget);
 
+//	mana_gd_ring_cq(gdma_queue, SET_ARM_BIT);
+
 	if (eq->eq.work_done < eq->eq.budget) {
 		mana_gd_ring_cq(gdma_queue, SET_ARM_BIT);
 		cq->cqe_done_since_doorbell = 0;
