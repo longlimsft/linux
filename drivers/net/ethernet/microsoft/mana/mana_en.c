@@ -2323,7 +2323,8 @@ static int mana_create_txq(struct mana_port_context *apc,
 		mana_create_txq_debugfs(apc, i);
 
 		set_bit(NAPI_STATE_NO_BUSY_POLL, &cq->napi.state);
-		netif_napi_add_locked(net, &cq->napi, mana_poll);
+//		netif_napi_add_locked(net, &cq->napi, mana_poll);
+		netif_napi_add_weight_locked(net, &cq->napi, mana_poll, 1);
 		napi_enable_locked(&cq->napi);
 		txq->napi_initialized = true;
 
