@@ -294,6 +294,8 @@ struct mana_cq {
 	int work_done;
 	int work_done_since_doorbell;
 	int budget;
+
+	int polled;
 };
 
 struct mana_recv_buf_oob {

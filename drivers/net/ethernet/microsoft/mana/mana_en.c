@@ -1662,6 +1662,9 @@ static void mana_poll_tx_cq(struct mana_cq *cq)
 	int comp_read;
 	int i;
 
+	if (++cq->polled < 1000)
+		cq->work_done = 1;
+
 	ndev = txq->ndev;
 	apc = netdev_priv(ndev);
 
@@ -1757,6 +1760,8 @@ static void mana_poll_tx_cq(struct mana_cq *cq)
 		WARN_ON_ONCE(1);
 
 	cq->work_done = pkt_transmitted;
+	if (cq->work_done)
+		cq->polled = 0;
 }
 
 static void mana_post_pkt_rxq(struct mana_rxq *rxq)
@@ -2128,6 +2133,9 @@ static void mana_schedule_napi(void *context, struct gdma_queue *gdma_queue)
 {
 	struct mana_cq *cq = context;
 
+	if (cq->type == MANA_CQ_TYPE_TX)
+		cq->polled = 0;
+
 	napi_schedule_irqoff(&cq->napi);
 }
 
@@ -2320,7 +2328,7 @@ static int mana_create_txq(struct mana_port_context *apc,
 		mana_create_txq_debugfs(apc, i);
 
 		set_bit(NAPI_STATE_NO_BUSY_POLL, &cq->napi.state);
-		netif_napi_add_locked(net, &cq->napi, mana_poll);
+		netif_napi_add_weight_locked(net, &cq->napi, mana_poll, 1);
 		napi_enable_locked(&cq->napi);
 		txq->napi_initialized = true;
 
