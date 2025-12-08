@@ -2032,6 +2032,9 @@ static void mana_poll_rx_cq(struct mana_cq *cq)
 	struct gdma_comp *comp = cq->gdma_comp_buf;
 	struct mana_rxq *rxq = cq->rxq;
 	int comp_read, i;
+	struct gdma_context *gc;
+
+	gc = rxq->gdma_rq->gdma_dev->gdma_context;
 
 	comp_read = mana_gd_poll_cq(cq->gdma_cq, comp, CQE_POLLING_BUFFER);
 	WARN_ON_ONCE(comp_read > CQE_POLLING_BUFFER);
@@ -2047,13 +2050,13 @@ static void mana_poll_rx_cq(struct mana_cq *cq)
 			return;
 
 		mana_process_rx_cqe(rxq, cq, &comp[i]);
+
+		if (i % RING_WQ_MAX == 0)
+			 mana_gd_wq_ring_doorbell(gc, rxq->gdma_rq);
 	}
 
-	if (comp_read > 0) {
-		struct gdma_context *gc = rxq->gdma_rq->gdma_dev->gdma_context;
-
+	if (comp_read > 0)
 		mana_gd_wq_ring_doorbell(gc, rxq->gdma_rq);
-	}
 
 	if (rxq->xdp_flush)
 		xdp_do_flush();
