@@ -647,8 +647,6 @@ static void mana_gd_process_eq_events(void *arg)
 
 	head = eq->head % (num_eqe << GDMA_EQE_OWNER_BITS);
 
-	trace_printk("eq id %d arm doorbell\n", eq->id);
-
 	mana_gd_ring_doorbell(gc, eq->gdma_dev->doorbell, eq->type, eq->id,
 			      head, SET_ARM_BIT);
 }
@@ -1461,8 +1459,6 @@ static irqreturn_t mana_gd_intr(int irq, void *arg)
 	struct gdma_irq_context *gic = arg;
 	struct list_head *eq_list = &gic->eq_list;
 	struct gdma_queue *eq;
-
-	trace_printk("mana int\n");
 
 	rcu_read_lock();
 	list_for_each_entry_rcu(eq, eq_list, entry) {
