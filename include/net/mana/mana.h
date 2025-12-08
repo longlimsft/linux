@@ -286,6 +286,10 @@ struct mana_cq {
 	struct gdma_comp *gdma_comp_buf;
 
 	int cqe_done_since_doorbell;
+	int work_done;
+
+	struct hrtimer cq_rearm_timer;
+	spinlock_t lock;
 };
 
 struct mana_recv_buf_oob {

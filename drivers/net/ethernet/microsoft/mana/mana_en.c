@@ -446,6 +446,8 @@ netdev_tx_t mana_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 	err = NETDEV_TX_OK;
 	atomic_inc(&txq->pending_sends);
 
+//	if (!netdev_xmit_more())
+//		mana_gd_wq_ring_doorbell(gd->gdma_context, gdma_sq);
 	mana_gd_wq_ring_doorbell(gd->gdma_context, gdma_sq);
 
 	/* skb may be freed after mana_gd_post_work_request. Do not use it. */
@@ -1744,7 +1746,7 @@ static void mana_poll_tx_cq(struct mana_cq *cq)
 		napi_consume_skb(skb, gdma_eq->eq.budget);
 
 		pkt_transmitted++;
-		gdma_eq->eq.work_done++;
+//		gdma_eq->eq.work_done++;
 	}
 
 	if (WARN_ON_ONCE(wqe_unit_cnt == 0))
@@ -1813,6 +1815,8 @@ static struct sk_buff *mana_build_skb(struct mana_rxq *rxq, void *buf_va,
 
 	skb_reserve(skb, rxq->headroom);
 	skb_put(skb, pkt_len);
+
+	trace_printk("skb headroom %d pkt_len %d\n", rxq->headroom, pkt_len);
 
 	return skb;
 }
@@ -2104,16 +2108,42 @@ static void mana_cq_handler(void *context, struct gdma_queue *gdma_queue)
 	struct mana_cq *cq = context;
 	struct gdma_queue *eq;
 
+
 	WARN_ON_ONCE(cq->gdma_cq != gdma_queue);
+	eq = gdma_queue->cq.parent;
 
 	if (cq->type == MANA_CQ_TYPE_RX)
 		mana_poll_rx_cq(cq);
-	else
-		mana_poll_tx_cq(cq);
+	else {
+		unsigned long flags;
+		int tx_cqe_done = 0;
 
-	eq = gdma_queue->cq.parent;
+		spin_lock_irqsave(&cq->lock, flags);
+
+		tx_cqe_done = cq->cqe_done_since_doorbell;
+		mana_poll_tx_cq(cq);
+		tx_cqe_done = cq->cqe_done_since_doorbell - tx_cqe_done;
+		eq->eq.work_done += tx_cqe_done;
+		// Delay ringing TX CQ doorbell if there is at least one CQE done
+		if (tx_cqe_done && eq->eq.work_done < eq->eq.budget) {
+			trace_printk("eq %d tx_cqe_done %d start cq_rearm_timer\n", eq->id, tx_cqe_done);
+			printk(KERN_ERR "%s: eq %d tx_cqe_done %d start cq_rearm_timer\n", __func__, eq->id, tx_cqe_done);
+			hrtimer_start(&cq->cq_rearm_timer, ns_to_ktime(100 * 1000), HRTIMER_MODE_REL);
+			spin_unlock_irqrestore(&cq->lock, flags);
+
+			return;
+		}
+
+		trace_printk("eq %d tx_cqe_done %d\n", eq->id, tx_cqe_done);
+		printk("%s: eq %d tx_cqe_done %d\n", __func__, eq->id, tx_cqe_done);
+		spin_unlock_irqrestore(&cq->lock, flags);
+	}
 
 	trace_printk("eq id %d cq %s work_done %d budget %d\n", eq->id, cq->type == MANA_CQ_TYPE_RX ? "rx" : "tx", eq->eq.work_done, eq->eq.budget);
+
+	if (cq->type == MANA_CQ_TYPE_TX)
+		printk(KERN_ERR "%s: eq id %d work_done %d budget %d\n", __func__, eq->id, eq->eq.work_done, eq->eq.budget);
+
 
 //	mana_gd_ring_cq(gdma_queue, SET_ARM_BIT);
 
@@ -2162,6 +2192,7 @@ static void mana_destroy_txq(struct mana_port_context *apc)
 
 		mana_destroy_wq_obj(apc, GDMA_SQ, apc->tx_qp[i].tx_object);
 
+		hrtimer_cancel(&apc->tx_qp[i].tx_cq.cq_rearm_timer);
 		mana_deinit_cq(apc, &apc->tx_qp[i].tx_cq);
 
 		mana_deinit_txq(apc, &apc->tx_qp[i].txq);
@@ -2192,6 +2223,39 @@ static void mana_create_txq_debugfs(struct mana_port_context *apc, int idx)
 			    tx_qp->txq.gdma_sq, &mana_dbg_q_fops);
 	debugfs_create_file("cq_dump", 0400, tx_qp->mana_tx_debugfs,
 			    tx_qp->tx_cq.gdma_cq, &mana_dbg_q_fops);
+}
+
+
+static enum hrtimer_restart cq_rearm_func(struct hrtimer *t)
+{
+	struct mana_cq *cq = container_of(t, struct mana_cq, cq_rearm_timer);
+	int cqe_done;
+	unsigned long flags;
+	struct gdma_queue *gdma_queue = cq->gdma_cq;
+
+	spin_lock_irqsave(&cq->lock, flags);
+	cqe_done = cq->cqe_done_since_doorbell;
+	mana_poll_tx_cq(cq);
+	cqe_done = cq->cqe_done_since_doorbell - cqe_done;
+
+	trace_printk("cqe_done %d cqe_done_since_doorbell %d\n", cqe_done, cq->cqe_done_since_doorbell);
+	printk(KERN_ERR "%s: cqe_done %d cqe_done_since_doorbell %d\n", __func__, cqe_done, cq->cqe_done_since_doorbell);
+
+	if (!cqe_done || cq->cqe_done_since_doorbell > cq->gdma_cq->queue_size / COMP_ENTRY_SIZE * 4) {
+		cq->cqe_done_since_doorbell = 0;
+		mana_gd_ring_cq(gdma_queue, SET_ARM_BIT);
+
+		spin_unlock_irqrestore(&cq->lock, flags);
+
+		return HRTIMER_NORESTART;
+	}
+
+	// continue to advacne rearm timer
+	hrtimer_forward_now(t, ns_to_ktime(100 * 1000));
+
+	spin_unlock_irqrestore(&cq->lock, flags);
+
+	return HRTIMER_RESTART;
 }
 
 static int mana_create_txq(struct mana_port_context *apc,
@@ -2256,6 +2320,9 @@ static int mana_create_txq(struct mana_port_context *apc,
 		cq->type = MANA_CQ_TYPE_TX;
 
 		cq->txq = txq;
+
+		hrtimer_setup(&cq->cq_rearm_timer, cq_rearm_func, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+		spin_lock_init(&cq->lock);
 
 		memset(&spec, 0, sizeof(spec));
 		spec.type = GDMA_CQ;
