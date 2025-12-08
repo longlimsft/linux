@@ -266,6 +266,7 @@ struct mana_tx_comp_oob {
 struct mana_rxq;
 
 #define CQE_POLLING_BUFFER 512
+#define RING_WQ_MAX 32
 
 struct mana_cq {
 	struct gdma_queue *gdma_cq;
