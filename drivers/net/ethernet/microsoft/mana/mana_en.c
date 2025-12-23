@@ -258,6 +258,8 @@ static int mana_get_gso_hs(struct sk_buff *skb)
 	return gso_hs;
 }
 
+static void mana_poll_tx_cq(struct mana_cq *cq);
+
 netdev_tx_t mana_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 {
 	enum mana_tx_pkt_format pkt_fmt = MANA_SHORT_PKT_FMT;
@@ -288,6 +290,22 @@ netdev_tx_t mana_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 	gdma_sq = txq->gdma_sq;
 	cq = &apc->tx_qp[txq_idx].tx_cq;
 	tx_stats = &txq->stats;
+
+	unsigned long flags;
+	spin_lock_irqsave(&cq->lock, flags);
+	cq->work_done = 0;
+	mana_poll_tx_cq(cq);
+	cq->work_done_since_doorbell += cq->work_done;
+	trace_printk("TX CQ %d work_done %d\n", cq->gdma_cq->id, cq->work_done);
+	if (cq->work_done)
+		hrtimer_start(&cq->cq_rearm_timer, ns_to_ktime(100), HRTIMER_MODE_REL);
+
+	if (cq->work_done_since_doorbell > cq->gdma_cq->queue_size / COMP_ENTRY_SIZE * 4) {
+		mana_gd_ring_cq(cq->gdma_cq, 0);
+		cq->work_done_since_doorbell = 0;
+	}
+
+	spin_unlock_irqrestore(&cq->lock, flags);
 
 	pkg.tx_oob.s_oob.vcq_num = cq->gdma_id;
 	pkg.tx_oob.s_oob.vsq_frame = txq->vsq_frame;
@@ -2087,8 +2105,31 @@ static int mana_cq_handler(void *context, struct gdma_queue *gdma_queue)
 
 	if (cq->type == MANA_CQ_TYPE_RX)
 		mana_poll_rx_cq(cq);
-	else
+	else {
+		unsigned long flags;
+
+		spin_lock_irqsave(&cq->lock, flags);
+		cq->work_done = 0;
 		mana_poll_tx_cq(cq);
+		w = cq->work_done;
+		cq->work_done_since_doorbell += w;
+		// Delay ringing TX CQ doorbell if there is no work done
+		if (!w) {
+			trace_printk("TX CQ %d work_done=0 start delayed arm timer\n", cq->gdma_cq->id);
+			hrtimer_start(&cq->cq_rearm_timer, ns_to_ktime(100), HRTIMER_MODE_REL);
+			napi_complete_done(&cq->napi, 0);
+		}
+
+		if (cq->work_done_since_doorbell > cq->gdma_cq->queue_size / COMP_ENTRY_SIZE * 4) {
+			mana_gd_ring_cq(gdma_queue, 0);
+			cq->work_done_since_doorbell = 0;
+		}
+
+		trace_printk("TX CQ %d work_done %d budget %d\n", cq->gdma_cq->id, w, cq->budget);
+		spin_unlock_irqrestore(&cq->lock, flags);
+
+		return w;
+	}
 
 	w = cq->work_done;
 	cq->work_done_since_doorbell += w;
@@ -2127,6 +2168,9 @@ static int mana_poll(struct napi_struct *napi, int budget)
 static void mana_schedule_napi(void *context, struct gdma_queue *gdma_queue)
 {
 	struct mana_cq *cq = context;
+
+	if (cq->type == MANA_CQ_TYPE_TX)
+		trace_printk("mana int tx cq %d\n", cq->gdma_cq->id);
 
 	napi_schedule_irqoff(&cq->napi);
 }
@@ -2172,6 +2216,10 @@ static void mana_destroy_txq(struct mana_port_context *apc)
 		}
 		mana_destroy_wq_obj(apc, GDMA_SQ, apc->tx_qp[i].tx_object);
 
+		printk("%s: calling hrtimer_cancel\n", __func__);
+		hrtimer_cancel(&apc->tx_qp[i].tx_cq.cq_rearm_timer);
+		printk("%s: called hrtimer_cancel\n", __func__);
+
 		mana_deinit_cq(apc, &apc->tx_qp[i].tx_cq);
 
 		mana_deinit_txq(apc, &apc->tx_qp[i].txq);
@@ -2204,6 +2252,39 @@ static void mana_create_txq_debugfs(struct mana_port_context *apc, int idx)
 			    tx_qp->txq.gdma_sq, &mana_dbg_q_fops);
 	debugfs_create_file("cq_dump", 0400, tx_qp->mana_tx_debugfs,
 			    tx_qp->tx_cq.gdma_cq, &mana_dbg_q_fops);
+}
+
+static enum hrtimer_restart cq_rearm_func(struct hrtimer *t)
+{
+	struct mana_cq *cq = container_of(t, struct mana_cq, cq_rearm_timer);
+	unsigned long flags;
+	struct gdma_queue *gdma_queue = cq->gdma_cq;
+
+	spin_lock_irqsave(&cq->lock, flags);
+	cq->work_done = 0;
+	mana_poll_tx_cq(cq);
+	cq->work_done_since_doorbell += cq->work_done;
+
+	if (!cq->work_done || cq->work_done_since_doorbell > cq->gdma_cq->queue_size / COMP_ENTRY_SIZE * 4) {
+		trace_printk("TX cq %d work_done %d since_doorbell %d arm\n", gdma_queue->id, cq->work_done, cq->work_done_since_doorbell);
+		cq->work_done_since_doorbell = 0;
+		mana_gd_ring_cq(gdma_queue, SET_ARM_BIT);
+
+		spin_unlock_irqrestore(&cq->lock, flags);
+
+		return HRTIMER_NORESTART;
+	}
+
+	trace_printk("TX cq %d work_done %d since_doorbell %d advance timer\n", gdma_queue->id, cq->work_done, cq->work_done_since_doorbell);
+
+	/* Continue to advacne rearm timer when there is at least one work done */
+//	hrtimer_forward_now(t, ns_to_ktime(100));
+	hrtimer_start(t, ns_to_ktime(100), HRTIMER_MODE_REL);
+
+	spin_unlock_irqrestore(&cq->lock, flags);
+
+//	return HRTIMER_RESTART;
+	return HRTIMER_NORESTART;
 }
 
 static int mana_create_txq(struct mana_port_context *apc,
@@ -2268,6 +2349,9 @@ static int mana_create_txq(struct mana_port_context *apc,
 		cq->type = MANA_CQ_TYPE_TX;
 
 		cq->txq = txq;
+
+		hrtimer_setup(&cq->cq_rearm_timer, cq_rearm_func, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+		spin_lock_init(&cq->lock);
 
 		memset(&spec, 0, sizeof(spec));
 		spec.type = GDMA_CQ;
