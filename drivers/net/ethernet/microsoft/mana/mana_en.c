@@ -2081,6 +2081,7 @@ static void mana_poll_rx_cq(struct mana_cq *cq)
 static int mana_cq_handler(void *context, struct gdma_queue *gdma_queue)
 {
 	struct mana_cq *cq = context;
+	bool arm = false;
 	int w;
 
 	WARN_ON_ONCE(cq->gdma_cq != gdma_queue);
@@ -2094,11 +2095,23 @@ static int mana_cq_handler(void *context, struct gdma_queue *gdma_queue)
 	cq->work_done_since_doorbell += w;
 
 	if (w < cq->budget) {
-		mana_gd_ring_cq(gdma_queue, SET_ARM_BIT);
-		cq->work_done_since_doorbell = 0;
+		arm = true;
+		if (cq->type == MANA_CQ_TYPE_TX) {
+			if (!cq->timer_rescheduled || w) {
+				hrtimer_start(&cq->cq_rearm_timer, ns_to_ktime(10000), HRTIMER_MODE_REL);
+				arm = false;
+			}
+		}
+
+		if (arm) {
+			mana_gd_ring_cq(gdma_queue, SET_ARM_BIT);
+			cq->work_done_since_doorbell = 0;
+		}
+
 		napi_complete_done(&cq->napi, w);
-	} else if (cq->work_done_since_doorbell >
-		   cq->gdma_cq->queue_size / COMP_ENTRY_SIZE * 4) {
+	}
+
+	if (!arm && cq->work_done_since_doorbell > cq->gdma_cq->queue_size / COMP_ENTRY_SIZE * 4) {
 		/* MANA hardware requires at least one doorbell ring every 8
 		 * wraparounds of CQ even if there is no need to arm the CQ.
 		 * This driver rings the doorbell as soon as we have exceeded
@@ -2128,6 +2141,7 @@ static void mana_schedule_napi(void *context, struct gdma_queue *gdma_queue)
 {
 	struct mana_cq *cq = context;
 
+	cq->timer_rescheduled = false;
 	napi_schedule_irqoff(&cq->napi);
 }
 
@@ -2172,6 +2186,8 @@ static void mana_destroy_txq(struct mana_port_context *apc)
 		}
 		mana_destroy_wq_obj(apc, GDMA_SQ, apc->tx_qp[i].tx_object);
 
+		hrtimer_cancel(&apc->tx_qp[i].tx_cq.cq_rearm_timer);
+
 		mana_deinit_cq(apc, &apc->tx_qp[i].tx_cq);
 
 		mana_deinit_txq(apc, &apc->tx_qp[i].txq);
@@ -2204,6 +2220,15 @@ static void mana_create_txq_debugfs(struct mana_port_context *apc, int idx)
 			    tx_qp->txq.gdma_sq, &mana_dbg_q_fops);
 	debugfs_create_file("cq_dump", 0400, tx_qp->mana_tx_debugfs,
 			    tx_qp->tx_cq.gdma_cq, &mana_dbg_q_fops);
+}
+
+static enum hrtimer_restart cq_rearm_func(struct hrtimer *t)
+{
+	struct mana_cq *cq = container_of(t, struct mana_cq, cq_rearm_timer);
+
+	cq->timer_rescheduled = true;
+	napi_schedule_irqoff(&cq->napi);
+	return HRTIMER_NORESTART;
 }
 
 static int mana_create_txq(struct mana_port_context *apc,
@@ -2268,6 +2293,7 @@ static int mana_create_txq(struct mana_port_context *apc,
 		cq->type = MANA_CQ_TYPE_TX;
 
 		cq->txq = txq;
+		hrtimer_setup(&cq->cq_rearm_timer, cq_rearm_func, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
 
 		memset(&spec, 0, sizeof(spec));
 		spec.type = GDMA_CQ;

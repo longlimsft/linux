@@ -294,6 +294,9 @@ struct mana_cq {
 	int work_done;
 	int work_done_since_doorbell;
 	int budget;
+
+	struct hrtimer cq_rearm_timer;
+	bool timer_rescheduled;
 };
 
 struct mana_recv_buf_oob {
