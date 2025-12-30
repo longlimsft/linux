@@ -1665,8 +1665,7 @@ static void mana_poll_tx_cq(struct mana_cq *cq)
 	ndev = txq->ndev;
 	apc = netdev_priv(ndev);
 
-	comp_read = mana_gd_poll_cq(cq->gdma_cq, completions,
-				    CQE_POLLING_BUFFER);
+	comp_read = mana_gd_poll_cq(cq->gdma_cq, completions, min(cq->gdma_cq->queue_size, CQE_POLLING_BUFFER));
 
 	if (comp_read < 1)
 		return;
