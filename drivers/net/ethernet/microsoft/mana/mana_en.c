@@ -1646,7 +1646,8 @@ static void mana_poll_tx_cq(struct mana_cq *cq)
 	apc = netdev_priv(ndev);
 
 	comp_read = mana_gd_poll_cq(cq->gdma_cq, completions,
-				    CQE_POLLING_BUFFER);
+				    min(cq->gdma_cq->queue_size / COMP_ENTRY_SIZE * 4,
+					(u32)CQE_POLLING_BUFFER));
 
 	if (comp_read < 1)
 		return;
@@ -2091,10 +2092,10 @@ static int mana_cq_handler(void *context, struct gdma_queue *gdma_queue)
 		napi_complete_done(&cq->napi, w);
 	}
 
-	if (!arm && cq->work_done_since_doorbell > cq->gdma_cq->queue_size / COMP_ENTRY_SIZE * 4) {
+	if (!arm && cq->work_done_since_doorbell >= cq->gdma_cq->queue_size / COMP_ENTRY_SIZE * 4) {
 		/* MANA hardware requires at least one doorbell ring every 8
 		 * wraparounds of CQ even if there is no need to arm the CQ.
-		 * This driver rings the doorbell as soon as we have exceeded
+		 * This driver rings the doorbell as soon as it has processed
 		 * 4 wraparounds.
 		 */
 		mana_gd_ring_cq(gdma_queue, 0);
