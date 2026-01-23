@@ -159,9 +159,15 @@ static int mana_gd_query_max_resources(struct pci_dev *pdev)
 	 * Use dedicated MSIx for EQs whenever possible, use MSIx sharing for
 	 * Ethernet EQs when (max_num_queues * num_ports > num_msix_usable - 1)
 	 */
-	gc->max_num_queues = min(gc->max_num_queues, max_num_queues);
-	if (gc->max_num_queues * num_ports > gc->num_msix_usable - 1)
+	max_num_queues = min(gc->max_num_queues, max_num_queues);
+	if (max_num_queues * num_ports > gc->num_msix_usable - 1)
 		gc->msi_sharing = true;
+
+	/* If MSI is shared, use max allowed value */
+	if (gc->msi_sharing)
+		 gc->max_num_queues = min(gc->num_msix_usable - 1, gc->max_num_queues);
+	else
+		 gc->max_num_queues = max_num_queues;
 
 	dev_info(gc->dev, "MSI sharing mode %d max queues %d\n",
 		 gc->msi_sharing, gc->max_num_queues);
