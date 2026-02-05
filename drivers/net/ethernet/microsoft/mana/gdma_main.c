@@ -165,9 +165,9 @@ static int mana_gd_query_max_resources(struct pci_dev *pdev)
 
 	/* If MSI is shared, use max allowed value */
 	if (gc->msi_sharing)
-		 gc->max_num_queues = min(gc->num_msix_usable - 1, gc->max_num_queues);
+		 gc->max_num_queues_vport = min(gc->num_msix_usable - 1, gc->max_num_queues);
 	else
-		 gc->max_num_queues = max_num_queues;
+		 gc->max_num_queues_vport = max_num_queues;
 
 	dev_info(gc->dev, "MSI sharing mode %d max queues %d\n",
 		 gc->msi_sharing, gc->max_num_queues);

@@ -392,6 +392,7 @@ struct gdma_context {
 
 	/* Per-vPort max number of queues */
 	unsigned int		max_num_queues;
+	unsigned int		max_num_queues_vport;
 	unsigned int		max_num_msix;
 	unsigned int		num_msix_usable;
 	struct xarray		irq_contexts;
