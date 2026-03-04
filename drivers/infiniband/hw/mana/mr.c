@@ -199,6 +199,7 @@ err_umem:
 	ib_umem_release(mr->umem);
 
 err_free:
+	up_read(&dev->reset_rwsem);
 	kfree(mr);
 	return ERR_PTR(err);
 }
@@ -326,9 +327,11 @@ int mana_ib_dereg_mr(struct ib_mr *ibmr, struct ib_udata *udata)
 		mutex_unlock(&mana_ucontext->lock);
 	}
 
-	err = mana_ib_gd_destroy_mr(dev, mr->mr_handle);
-	if (err)
-		return err;
+	if (mr->mr_handle != INVALID_MANA_HANDLE) {
+		err = mana_ib_gd_destroy_mr(dev, mr->mr_handle);
+		if (err)
+			return err;
+	}
 
 	if (mr->umem)
 		ib_umem_release(mr->umem);

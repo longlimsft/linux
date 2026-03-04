@@ -88,7 +88,8 @@ int mana_ib_destroy_wq(struct ib_wq *ibwq, struct ib_udata *udata)
 		mutex_unlock(&mana_ucontext->lock);
 	}
 
-	mana_ib_destroy_queue(mdev, &wq->queue);
+	if (wq->rx_object != INVALID_MANA_HANDLE)
+		mana_ib_destroy_queue(mdev, &wq->queue);
 
 	kfree(wq);
 
