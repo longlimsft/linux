@@ -191,6 +191,7 @@ struct mana_ib_qp {
 
 	refcount_t		refcount;
 	struct completion	free;
+	struct list_head	ucontext_list;
 };
 
 struct mana_ib_ucontext {
@@ -201,6 +202,7 @@ struct mana_ib_ucontext {
 	struct mutex lock;
 	struct list_head pd_list;
 	struct list_head cq_list;
+	struct list_head qp_list;
 	struct list_head wq_list;
 };
 
