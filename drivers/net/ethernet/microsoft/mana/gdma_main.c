@@ -448,6 +448,23 @@ out:
 	gc->in_service = false;
 }
 
+#ifdef CONFIG_DEBUG_FS
+static ssize_t mana_dbg_trigger_reset_write(struct file *file,
+					    const char __user *buf,
+					    size_t count, loff_t *pos)
+{
+	struct pci_dev *pdev = file_inode(file)->i_private;
+
+	mana_serv_reset(pdev);
+	return count;
+}
+
+static const struct file_operations mana_dbg_trigger_reset_fops = {
+	.owner = THIS_MODULE,
+	.write = mana_dbg_trigger_reset_write,
+};
+#endif
+
 struct mana_serv_work {
 	struct work_struct serv_work;
 	struct pci_dev *pdev;
@@ -1940,6 +1957,11 @@ static int mana_gd_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	err = mana_rdma_probe(&gc->mana_ib);
 	if (err)
 		goto cleanup_mana;
+
+#ifdef CONFIG_DEBUG_FS
+	debugfs_create_file("trigger_reset", 0200, gc->mana_pci_debugfs,
+			    pdev, &mana_dbg_trigger_reset_fops);
+#endif
 
 	return 0;
 
