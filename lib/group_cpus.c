@@ -7,6 +7,7 @@
 #include <linux/slab.h>
 #include <linux/cpu.h>
 #include <linux/sort.h>
+#include <linux/atomic.h>
 #include <linux/group_cpus.h>
 
 #ifdef CONFIG_SMP
@@ -246,10 +247,13 @@ static void alloc_nodes_groups(unsigned int numgrps,
 	}
 }
 
+static atomic_t group_spread_cnt = ATOMIC_INIT(0);
+
 static int __group_cpus_evenly(unsigned int startgrp, unsigned int numgrps,
 			       cpumask_var_t *node_to_cpumask,
 			       const struct cpumask *cpu_mask,
-			       struct cpumask *nmsk, struct cpumask *masks)
+			       struct cpumask *nmsk, struct cpumask *masks,
+			       unsigned int spread_offset)
 {
 	unsigned int i, n, nodes, cpus_per_grp, extra_grps, done = 0;
 	unsigned int last_grp = numgrps;
@@ -308,11 +312,15 @@ static int __group_cpus_evenly(unsigned int startgrp, unsigned int numgrps,
 		for (v = 0; v < nv->ngroups; v++, curgrp++) {
 			cpus_per_grp = ncpus / nv->ngroups;
 
-			/* Account for extra groups to compensate rounding errors */
-			if (extra_grps) {
+			/*
+			 * Rotate which groups get the extra CPU so that
+			 * successive callers produce different mappings,
+			 * avoiding IRQ stacking when multiple devices
+			 * share the same CPU topology.
+			 */
+			if (extra_grps &&
+			    (v + spread_offset) % nv->ngroups < extra_grps)
 				cpus_per_grp++;
-				--extra_grps;
-			}
 
 			/*
 			 * wrapping has to be considered given 'startgrp'
@@ -371,6 +379,8 @@ struct cpumask *group_cpus_evenly(unsigned int numgrps, unsigned int *nummasks)
 	if (!masks)
 		goto fail_node_to_cpumask;
 
+	unsigned int spread_offset = atomic_fetch_inc(&group_spread_cnt);
+
 	build_node_to_cpumask(node_to_cpumask);
 
 	/*
@@ -389,7 +399,7 @@ struct cpumask *group_cpus_evenly(unsigned int numgrps, unsigned int *nummasks)
 
 	/* grouping present CPUs first */
 	ret = __group_cpus_evenly(curgrp, numgrps, node_to_cpumask,
-				  npresmsk, nmsk, masks);
+				  npresmsk, nmsk, masks, spread_offset);
 	if (ret < 0)
 		goto fail_node_to_cpumask;
 	nr_present = ret;
@@ -406,7 +416,7 @@ struct cpumask *group_cpus_evenly(unsigned int numgrps, unsigned int *nummasks)
 		curgrp = nr_present;
 	cpumask_andnot(npresmsk, cpu_possible_mask, npresmsk);
 	ret = __group_cpus_evenly(curgrp, numgrps, node_to_cpumask,
-				  npresmsk, nmsk, masks);
+				  npresmsk, nmsk, masks, spread_offset);
 	if (ret >= 0)
 		nr_others = ret;
 
