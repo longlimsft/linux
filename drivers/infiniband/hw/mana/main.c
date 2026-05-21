@@ -635,6 +635,8 @@ int mana_ib_query_gid(struct ib_device *ibdev, u32 port, int index,
 
 void mana_ib_disassociate_ucontext(struct ib_ucontext *ibcontext)
 {
+	printk(KERN_ERR "MANA_DBG: disassociate_ucontext enter\n");
+	printk(KERN_ERR "MANA_DBG: disassociate_ucontext done\n");
 }
 
 int mana_ib_gd_query_adapter_caps(struct mana_ib_dev *dev)

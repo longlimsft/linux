@@ -941,25 +941,43 @@ static int __uverbs_cleanup_ufile(struct ib_uverbs_file *ufile,
 void uverbs_destroy_ufile_hw(struct ib_uverbs_file *ufile,
 			     enum rdma_remove_reason reason)
 {
+	printk(KERN_ERR "MANA_DBG: uverbs_destroy_ufile_hw enter, reason=%d\n", reason);
+
 	down_write(&ufile->hw_destroy_rwsem);
+	printk(KERN_ERR "MANA_DBG: hw_destroy_rwsem acquired\n");
 
 	/*
 	 * If a ucontext was never created then we can't have any uobjects to
 	 * cleanup, nothing to do.
 	 */
-	if (!ufile->ucontext)
+	if (!ufile->ucontext) {
+		printk(KERN_ERR "MANA_DBG: no ucontext, skipping\n");
 		goto done;
-
-	while (!list_empty(&ufile->uobjects) &&
-	       !__uverbs_cleanup_ufile(ufile, reason)) {
 	}
 
-	if (WARN_ON(!list_empty(&ufile->uobjects)))
+	printk(KERN_ERR "MANA_DBG: cleaning up uobjects, list_empty=%d\n",
+		list_empty(&ufile->uobjects));
+	while (!list_empty(&ufile->uobjects) &&
+	       !__uverbs_cleanup_ufile(ufile, reason)) {
+		printk(KERN_ERR "MANA_DBG: cleanup pass done, list_empty=%d\n",
+			list_empty(&ufile->uobjects));
+	}
+	printk(KERN_ERR "MANA_DBG: cleanup loop exited, list_empty=%d\n",
+		list_empty(&ufile->uobjects));
+
+	if (WARN_ON(!list_empty(&ufile->uobjects))) {
+		printk(KERN_ERR "MANA_DBG: forcing DRIVER_FAILURE cleanup\n");
 		__uverbs_cleanup_ufile(ufile, RDMA_REMOVE_DRIVER_FAILURE);
+		printk(KERN_ERR "MANA_DBG: DRIVER_FAILURE cleanup done\n");
+	}
+
+	printk(KERN_ERR "MANA_DBG: calling ufile_destroy_ucontext\n");
 	ufile_destroy_ucontext(ufile, reason);
+	printk(KERN_ERR "MANA_DBG: ufile_destroy_ucontext done\n");
 
 done:
 	up_write(&ufile->hw_destroy_rwsem);
+	printk(KERN_ERR "MANA_DBG: uverbs_destroy_ufile_hw done\n");
 }
 
 const struct uverbs_obj_type_class uverbs_fd_class = {

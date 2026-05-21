@@ -1295,7 +1295,10 @@ static void disable_device(struct ib_device *device)
 
 	/* Pairs with refcount_set in enable_device */
 	ib_device_put(device);
+	printk(KERN_ERR "MANA_DBG: waiting for unreg_completion (refcount=%d)\n",
+		refcount_read(&device->refcount));
 	wait_for_completion(&device->unreg_completion);
+	printk(KERN_ERR "MANA_DBG: unreg_completion done\n");
 
 	/*
 	 * compat devices must be removed after device refcount drops to zero.

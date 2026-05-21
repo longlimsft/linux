@@ -1223,6 +1223,9 @@ static void ib_uverbs_free_hw_resources(struct ib_uverbs_device *uverbs_dev,
 					struct ib_device *ib_dev)
 {
 	struct ib_uverbs_file *file;
+	int file_count = 0;
+
+	printk(KERN_ERR "MANA_DBG: free_hw_resources enter\n");
 
 	/* Pending running commands to terminate */
 	uverbs_disassociate_api_pre(uverbs_dev);
@@ -1233,15 +1236,13 @@ static void ib_uverbs_free_hw_resources(struct ib_uverbs_device *uverbs_dev,
 					struct ib_uverbs_file, list);
 		list_del_init(&file->list);
 		kref_get(&file->ref);
+		file_count++;
 
-		/* We must release the mutex before going ahead and calling
-		 * uverbs_cleanup_ufile, as it might end up indirectly calling
-		 * uverbs_close, for example due to freeing the resources (e.g
-		 * mmput).
-		 */
 		mutex_unlock(&uverbs_dev->lists_mutex);
 
+		printk(KERN_ERR "MANA_DBG: destroying ufile_hw #%d\n", file_count);
 		uverbs_destroy_ufile_hw(file, RDMA_REMOVE_DRIVER_REMOVE);
+		printk(KERN_ERR "MANA_DBG: ufile_hw #%d destroyed\n", file_count);
 		kref_put(&file->ref, ib_uverbs_release_file);
 
 		mutex_lock(&uverbs_dev->lists_mutex);
@@ -1249,6 +1250,8 @@ static void ib_uverbs_free_hw_resources(struct ib_uverbs_device *uverbs_dev,
 	mutex_unlock(&uverbs_dev->lists_mutex);
 
 	uverbs_disassociate_api(uverbs_dev->uapi);
+	printk(KERN_ERR "MANA_DBG: free_hw_resources done, processed %d files\n",
+		file_count);
 }
 
 static void ib_uverbs_remove_one(struct ib_device *device, void *client_data)
@@ -1256,31 +1259,29 @@ static void ib_uverbs_remove_one(struct ib_device *device, void *client_data)
 	struct ib_uverbs_device *uverbs_dev = client_data;
 	int wait_clients = 1;
 
+	printk(KERN_ERR "MANA_DBG: ib_uverbs_remove_one enter dev=%s\n",
+		dev_name(&device->dev));
+
 	cdev_device_del(&uverbs_dev->cdev, &uverbs_dev->dev);
 	ida_free(&uverbs_ida, uverbs_dev->devnum);
 
 	if (device->ops.disassociate_ucontext) {
-		/* We disassociate HW resources and immediately return.
-		 * Userspace will see a EIO errno for all future access.
-		 * Upon returning, ib_device may be freed internally and is not
-		 * valid any more.
-		 * uverbs_device is still available until all clients close
-		 * their files, then the uverbs device ref count will be zero
-		 * and its resources will be freed.
-		 * Note: At this point no more files can be opened since the
-		 * cdev was deleted, however active clients can still issue
-		 * commands and close their open files.
-		 */
+		printk(KERN_ERR "MANA_DBG: calling ib_uverbs_free_hw_resources\n");
 		ib_uverbs_free_hw_resources(uverbs_dev, device);
+		printk(KERN_ERR "MANA_DBG: ib_uverbs_free_hw_resources done\n");
 		wait_clients = 0;
 	}
 
 	if (refcount_dec_and_test(&uverbs_dev->refcount))
 		ib_uverbs_comp_dev(uverbs_dev);
-	if (wait_clients)
+	if (wait_clients) {
+		printk(KERN_ERR "MANA_DBG: waiting for clients completion\n");
 		wait_for_completion(&uverbs_dev->comp);
+		printk(KERN_ERR "MANA_DBG: clients completion done\n");
+	}
 
 	put_device(&uverbs_dev->dev);
+	printk(KERN_ERR "MANA_DBG: ib_uverbs_remove_one done\n");
 }
 
 static int __init ib_uverbs_init(void)

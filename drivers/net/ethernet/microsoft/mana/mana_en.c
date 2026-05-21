@@ -3855,15 +3855,25 @@ void mana_rdma_remove(struct gdma_dev *gd)
 		return;
 	}
 
+	printk(KERN_ERR "MANA_DBG: mana_rdma_remove enter\n");
+
 	WRITE_ONCE(gd->rdma_teardown, true);
 
-	if (gc->service_wq)
+	if (gc->service_wq) {
+		printk(KERN_ERR "MANA_DBG: flushing service_wq\n");
 		flush_workqueue(gc->service_wq);
+		printk(KERN_ERR "MANA_DBG: service_wq flushed\n");
+	}
 
-	if (gd->adev)
+	if (gd->adev) {
+		printk(KERN_ERR "MANA_DBG: calling remove_adev (triggers mana_ib_remove)\n");
 		remove_adev(gd);
+		printk(KERN_ERR "MANA_DBG: remove_adev done\n");
+	}
 
+	printk(KERN_ERR "MANA_DBG: calling mana_gd_deregister_device\n");
 	mana_gd_deregister_device(gd);
+	printk(KERN_ERR "MANA_DBG: mana_rdma_remove done\n");
 }
 
 struct net_device *mana_get_primary_netdev(struct mana_context *ac,

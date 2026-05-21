@@ -2185,10 +2185,19 @@ static void mana_gd_remove(struct pci_dev *pdev)
 {
 	struct gdma_context *gc = pci_get_drvdata(pdev);
 
-	mana_rdma_remove(&gc->mana_ib);
-	mana_remove(&gc->mana, false);
+	printk(KERN_ERR "MANA_DBG: mana_gd_remove enter\n");
 
+	printk(KERN_ERR "MANA_DBG: calling mana_rdma_remove\n");
+	mana_rdma_remove(&gc->mana_ib);
+	printk(KERN_ERR "MANA_DBG: mana_rdma_remove done\n");
+
+	printk(KERN_ERR "MANA_DBG: calling mana_remove\n");
+	mana_remove(&gc->mana, false);
+	printk(KERN_ERR "MANA_DBG: mana_remove done\n");
+
+	printk(KERN_ERR "MANA_DBG: calling mana_gd_cleanup\n");
 	mana_gd_cleanup(pdev);
+	printk(KERN_ERR "MANA_DBG: mana_gd_cleanup done\n");
 
 	debugfs_remove_recursive(gc->mana_pci_debugfs);
 
@@ -2203,7 +2212,7 @@ static void mana_gd_remove(struct pci_dev *pdev)
 	pci_release_regions(pdev);
 	pci_disable_device(pdev);
 
-	dev_dbg(&pdev->dev, "mana gdma remove successful\n");
+	printk(KERN_ERR "MANA_DBG: mana_gd_remove done\n");
 }
 
 /* The 'state' parameter is not used. */

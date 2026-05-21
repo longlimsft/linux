@@ -240,17 +240,34 @@ static void mana_ib_remove(struct auxiliary_device *adev)
 {
 	struct mana_ib_dev *dev = dev_get_drvdata(&adev->dev);
 
-	if (mana_ib_is_rnic(dev))
-		mana_drain_gsi_sqs(dev);
+	printk(KERN_ERR "MANA_DBG: mana_ib_remove enter, is_rnic=%d\n",
+		   mana_ib_is_rnic(dev));
 
+	if (mana_ib_is_rnic(dev)) {
+		printk(KERN_ERR "MANA_DBG: draining GSI SQs\n");
+		mana_drain_gsi_sqs(dev);
+		printk(KERN_ERR "MANA_DBG: GSI SQs drained\n");
+	}
+
+	printk(KERN_ERR "MANA_DBG: calling rdma_user_mmap_disassociate\n");
+	rdma_user_mmap_disassociate(&dev->ib_dev);
+	printk(KERN_ERR "MANA_DBG: rdma_user_mmap_disassociate done\n");
+
+	printk(KERN_ERR "MANA_DBG: calling ib_unregister_device\n");
 	ib_unregister_device(&dev->ib_dev);
+	printk(KERN_ERR "MANA_DBG: ib_unregister_device done\n");
+
 	dma_pool_destroy(dev->av_pool);
 	if (mana_ib_is_rnic(dev)) {
+		printk(KERN_ERR "MANA_DBG: unregister_netdevice_notifier\n");
 		unregister_netdevice_notifier(&dev->nb);
+		printk(KERN_ERR "MANA_DBG: destroy_rnic_adapter\n");
 		mana_ib_gd_destroy_rnic_adapter(dev);
+		printk(KERN_ERR "MANA_DBG: destroy_eqs\n");
 		mana_ib_destroy_eqs(dev);
 	}
 	xa_destroy(&dev->qp_table_wq);
+	printk(KERN_ERR "MANA_DBG: mana_ib_remove done\n");
 	ib_dealloc_device(&dev->ib_dev);
 }
 
