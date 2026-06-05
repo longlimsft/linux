@@ -2553,7 +2553,7 @@ static int mana_create_txq(struct mana_port_context *apc,
 			goto out;
 		}
 
-		gc->cq_table[cq->gdma_id] = cq->gdma_cq;
+		rcu_assign_pointer(gc->cq_table[cq->gdma_id], cq->gdma_cq);
 
 		mana_create_txq_debugfs(apc, i);
 
@@ -2857,7 +2857,7 @@ static struct mana_rxq *mana_create_rxq(struct mana_port_context *apc,
 		goto out;
 	}
 
-	gc->cq_table[cq->gdma_id] = cq->gdma_cq;
+	rcu_assign_pointer(gc->cq_table[cq->gdma_id], cq->gdma_cq);
 
 	netif_napi_add_weight_locked(ndev, &cq->napi, mana_poll, 1);
 

@@ -744,7 +744,7 @@ static void mana_gd_process_eqe(struct gdma_queue *eq)
 		if (WARN_ON_ONCE(cq_id >= gc->max_num_cqs))
 			break;
 
-		cq = gc->cq_table[cq_id];
+		cq = rcu_dereference(gc->cq_table[cq_id]);
 		if (WARN_ON_ONCE(!cq || cq->type != GDMA_CQ || cq->id != cq_id))
 			break;
 
@@ -1053,13 +1053,19 @@ static void mana_gd_destroy_cq(struct gdma_context *gc,
 {
 	u32 id = queue->id;
 
-	if (id >= gc->max_num_cqs)
+	if (!gc->cq_table || id >= gc->max_num_cqs)
 		return;
 
-	if (!gc->cq_table[id])
+	if (!rcu_access_pointer(gc->cq_table[id]))
 		return;
 
-	gc->cq_table[id] = NULL;
+	rcu_assign_pointer(gc->cq_table[id], NULL);
+
+	/* Wait for in-flight EQ handlers that may have loaded the old
+	 * pointer via rcu_dereference() to finish before the caller
+	 * frees the CQ memory.
+	 */
+	synchronize_rcu();
 }
 
 int mana_gd_create_hwc_queue(struct gdma_dev *gd,
