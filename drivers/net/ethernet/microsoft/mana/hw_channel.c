@@ -836,6 +836,12 @@ static int mana_hwc_init_queues(struct hw_channel_context *hwc, u16 q_depth,
 {
 	int err;
 
+	/* CQ depth is q_depth * 2 (SQ + RQ) passed as u16 to create_cq.
+	 * Cap to prevent u16 truncation.
+	 */
+	if (q_depth > U16_MAX / 2)
+		q_depth = U16_MAX / 2;
+
 	err = mana_hwc_init_inflight_msg(hwc, q_depth);
 	if (err)
 		return err;
@@ -874,6 +880,40 @@ static int mana_hwc_init_queues(struct hw_channel_context *hwc, u16 q_depth,
 out:
 	/* mana_hwc_create_channel() will do the cleanup.*/
 	return err;
+}
+
+/* Tear down all HWC queues and free associated resources.  Used on
+ * the reinit-with-higher-queue-depth path and reinit fallback.
+ */
+static void mana_hwc_destroy_queues(struct hw_channel_context *hwc)
+{
+	struct gdma_context *gc = hwc->gdma_dev->gdma_context;
+
+	/* Destroy CQ first to deregister the EQ from the interrupt
+	 * handler list before freeing caller_ctx, TXQ, or RXQ memory.
+	 * A pending interrupt handler could still reach handle_resp()
+	 * which dereferences caller_ctx.
+	 */
+	if (hwc->cq) {
+		mana_hwc_destroy_cq(gc, hwc->cq);
+		hwc->cq = NULL;
+	}
+
+	kfree(hwc->caller_ctx);
+	hwc->caller_ctx = NULL;
+
+	if (hwc->txq) {
+		mana_hwc_destroy_wq(hwc, hwc->txq);
+		hwc->txq = NULL;
+	}
+
+	if (hwc->rxq) {
+		mana_hwc_destroy_wq(hwc, hwc->rxq);
+		hwc->rxq = NULL;
+	}
+
+	mana_gd_free_res_map(&hwc->inflight_msg_res);
+	hwc->num_inflight_msg = 0;
 }
 
 int mana_hwc_create_channel(struct gdma_context *gc)
@@ -921,8 +961,128 @@ int mana_hwc_create_channel(struct gdma_context *gc)
 		goto out;
 	}
 
+	/* The channel was bootstrapped at a minimal queue depth.  If the
+	 * device reports a higher maximum, tear down and rebuild with
+	 * the larger depth so more HWC commands can be in flight.
+	 */
+	if (q_depth_max > HW_CHANNEL_VF_BOOTSTRAP_QUEUE_DEPTH) {
+		/* Cap depth first, then validate.  This avoids rejecting
+		 * a large device-reported depth whose capped value would
+		 * pass the overflow check.
+		 */
+		if (q_depth_max > U16_MAX / 2)
+			q_depth_max = U16_MAX / 2;
+
+		/* Sanity-check device-reported values before using them
+		 * to size DMA allocations.  Enforce protocol minimums
+		 * for message sizes and check that q_depth * max_msg_size
+		 * plus alignment headroom fits in u32 (for
+		 * mana_hwc_alloc_dma_buf's MANA_PAGE_ALIGN).
+		 */
+		if (!max_req_msg_size || !max_resp_msg_size ||
+		    max_req_msg_size < sizeof(struct gdma_req_hdr) ||
+		    max_resp_msg_size < sizeof(struct gdma_resp_hdr) ||
+		    (u64)q_depth_max * max_req_msg_size >
+			U32_MAX - MANA_PAGE_SIZE ||
+		    (u64)q_depth_max * max_resp_msg_size >
+			U32_MAX - MANA_PAGE_SIZE) {
+			dev_err(hwc->dev,
+				"HWC: invalid dims q=%u req=%u resp=%u\n",
+				q_depth_max, max_req_msg_size,
+				max_resp_msg_size);
+			q_depth_max = HW_CHANNEL_VF_BOOTSTRAP_QUEUE_DEPTH;
+			goto skip_reinit;
+		}
+
+		err = mana_smc_teardown_hwc(&gc->shm_channel, false);
+		if (err) {
+			/* Keep using the bootstrap-depth channel. */
+			dev_err(hwc->dev,
+				"Failed to teardown HWC for reinit: %d\n",
+				err);
+			q_depth_max = HW_CHANNEL_VF_BOOTSTRAP_QUEUE_DEPTH;
+			goto skip_reinit;
+		}
+
+		hwc->setup_active = false;
+
+		/* Destroy queues first — mana_gd_destroy_cq inside
+		 * unpublishes the CQ from cq_table via
+		 * rcu_assign_pointer(NULL) + synchronize_rcu.
+		 * Must happen while cq_table is still valid.
+		 */
+		mana_hwc_destroy_queues(hwc);
+
+		gc->max_num_cqs = 0;
+		vfree(gc->cq_table);
+		gc->cq_table = NULL;
+
+		err = mana_hwc_init_queues(hwc, q_depth_max,
+					   max_req_msg_size,
+					   max_resp_msg_size);
+		if (err) {
+			dev_err(hwc->dev, "Failed to reinit HWC: %d\n", err);
+			goto reinit_fallback;
+		}
+
+		err = mana_hwc_establish_channel(gc, &q_depth_max,
+						 &max_req_msg_size,
+						 &max_resp_msg_size);
+		if (err) {
+			dev_err(hwc->dev, "Failed to re-establish HWC: %d\n",
+				err);
+			/* establish_channel does internal teardown on
+			 * failure.  If teardown succeeded (setup_active
+			 * cleared), MST entries are invalidated and we
+			 * can try the bootstrap fallback.  If teardown
+			 * also failed (setup_active still set), hardware
+			 * mappings may still be active — skip fallback.
+			 */
+			if (hwc->setup_active)
+				goto out;
+			goto reinit_fallback;
+		}
+
+	}
+
+	goto skip_reinit;
+
+reinit_fallback:
+	/* Restore bootstrap-depth channel so the device remains functional.
+	 * Free cq_table if it was allocated by a partially successful
+	 * establish attempt.
+	 */
+	dev_warn(hwc->dev, "HWC reinit failed, falling back to bootstrap depth\n");
+
+	mana_hwc_destroy_queues(hwc);
+
+	gc->max_num_cqs = 0;
+	vfree(gc->cq_table);
+	gc->cq_table = NULL;
+
+	err = mana_hwc_init_queues(hwc, HW_CHANNEL_VF_BOOTSTRAP_QUEUE_DEPTH,
+				   HW_CHANNEL_MAX_REQUEST_SIZE,
+				   HW_CHANNEL_MAX_RESPONSE_SIZE);
+	if (err) {
+		dev_err(hwc->dev, "Failed to restore bootstrap HWC: %d\n", err);
+		goto out;
+	}
+
+	err = mana_hwc_establish_channel(gc, &q_depth_max, &max_req_msg_size,
+					 &max_resp_msg_size);
+	if (err) {
+		dev_err(hwc->dev, "Failed to re-establish bootstrap HWC: %d\n",
+			err);
+		goto out;
+	}
+
+skip_reinit:
+
+	/* No RCU needed: still in mana_hwc_create_channel, the
+	 * pointer has not been published to concurrent senders yet.
+	 */
 	err = mana_hwc_test_channel(gc->hwc.driver_data,
-				    HW_CHANNEL_VF_BOOTSTRAP_QUEUE_DEPTH,
+				    hwc->num_inflight_msg,
 				    max_req_msg_size, max_resp_msg_size);
 	if (err) {
 		dev_err(hwc->dev, "Failed to test HWC: %d\n", err);
@@ -937,6 +1097,10 @@ out:
 
 void mana_hwc_destroy_channel(struct gdma_context *gc)
 {
+	/* No RCU needed: the RCU pointer is NULLed below with
+	 * rcu_assign_pointer + synchronize_rcu before any fields
+	 * are freed.  This is the only destroy entry point.
+	 */
 	struct hw_channel_context *hwc = gc->hwc.driver_data;
 	unsigned long flags;
 
@@ -972,10 +1136,21 @@ void mana_hwc_destroy_channel(struct gdma_context *gc)
 	 * on the init EQE arriving.
 	 *
 	 * The return value is intentionally not checked.  This is the
-	 * terminal cleanup path — resources must be freed regardless.
-	 * If teardown fails, hardware may still have active MST entries,
-	 * but the EQ deregistration and IOMMU unmapping below prevent
-	 * stale hardware accesses from reaching kernel memory.
+	 * terminal cleanup path (device removal, suspend, or init
+	 * failure) — resources must be freed regardless.  If teardown
+	 * fails, hardware may still have active MST entries, but:
+	 *
+	 *  - Interrupts: mana_hwc_destroy_cq() below calls
+	 *    mana_gd_deregister_irq() which removes the HWC EQ from
+	 *    the interrupt dispatch list via list_del_rcu() +
+	 *    synchronize_rcu().  After that, no interrupt handler can
+	 *    invoke handle_resp() or access CQ/RQ buffers — even if
+	 *    the IRQ is shared with data path queues.
+	 *
+	 *  - DMA: mana_hwc_destroy_wq() frees DMA buffers via
+	 *    dma_free_coherent() which unmaps the IOVA from the
+	 *    IOMMU.  Any stale hardware DMA to the old address
+	 *    faults at the IOMMU, not in kernel memory.
 	 */
 	if (hwc->setup_active) {
 		mana_smc_teardown_hwc(&gc->shm_channel, false);
@@ -983,8 +1158,11 @@ void mana_hwc_destroy_channel(struct gdma_context *gc)
 	}
 
 	/* After SMC teardown, no more hardware events should arrive.
-	 * Force-complete any remaining in-flight senders so they can
-	 * exit and drop their refs.
+	 * If teardown failed, handle_resp() may still race with this
+	 * loop via a late interrupt — this is safe because the per-slot
+	 * refcount model tolerates a concurrent complete() and both
+	 * paths (handle_resp and this loop) will correctly drop their
+	 * respective refs without double-releasing the slot.
 	 */
 	if (hwc->caller_ctx) {
 		struct hwc_caller_ctx *ctx;
