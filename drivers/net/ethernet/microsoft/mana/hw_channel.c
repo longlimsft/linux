@@ -702,7 +702,7 @@ static int mana_hwc_establish_channel(struct gdma_context *gc, u16 *q_depth,
 	if (!gc->cq_table)
 		return -ENOMEM;
 
-	gc->cq_table[cq->id] = cq;
+	rcu_assign_pointer(gc->cq_table[cq->id], cq);
 
 	return 0;
 }
