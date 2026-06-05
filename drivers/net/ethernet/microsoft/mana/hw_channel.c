@@ -77,7 +77,8 @@ static int mana_hwc_post_rx_wqe(const struct hwc_wq *hwc_rxq,
 }
 
 static void mana_hwc_handle_resp(struct hw_channel_context *hwc, u32 resp_len,
-				 struct hwc_work_request *rx_req, u16 msg_id)
+				 u16 msg_id,
+				 struct hwc_work_request *rx_req)
 {
 	const struct gdma_resp_hdr *resp_msg = rx_req->buf_va;
 	struct hwc_caller_ctx *ctx;
@@ -90,6 +91,19 @@ static void mana_hwc_handle_resp(struct hw_channel_context *hwc, u32 resp_len,
 	}
 
 	ctx = hwc->caller_ctx + msg_id;
+
+	/* Reject responses larger than the RX DMA buffer — the SGE
+	 * limits what hardware can DMA, so an oversized resp_len
+	 * indicates a firmware bug.  Fail rather than silently
+	 * truncating.
+	 */
+	if (resp_len > rx_req->buf_len) {
+		dev_err(hwc->dev, "HWC RX: resp_len %u > buf_len %u\n",
+			resp_len, rx_req->buf_len);
+		resp_len = 0;
+	}
+
+
 	err = mana_hwc_verify_resp_msg(ctx, resp_msg, resp_len);
 	if (err)
 		goto out;
@@ -263,16 +277,33 @@ static void mana_hwc_rx_event_handler(void *ctx, u32 gdma_rxq_id,
 
 	/* Select the RX work request for virtual address and for reposting. */
 	rq_base_addr = hwc_rxq->msg_buf->mem_info.dma_handle;
-	rx_req_idx = (sge->address - rq_base_addr) / hwc->max_req_msg_size;
+	rx_req_idx = (sge->address - rq_base_addr) / hwc->max_resp_msg_size;
 
-	if (rx_req_idx >= hwc_rxq->msg_buf->num_reqs) {
-		dev_err(hwc->dev, "HWC RX: wrong rx_req_idx=%llu, num_reqs=%u\n",
-			rx_req_idx, hwc_rxq->msg_buf->num_reqs);
+	if (rx_req_idx >= hwc_rxq->queue_depth) {
+		/* Can't repost — rx_req_idx is out of bounds so there
+		 * is no valid rx_req to recycle.  This permanently
+		 * leaks one RX WQE but indicates a corrupted SGE from
+		 * hardware, which is an unrecoverable device error.
+		 */
+		dev_err(hwc->dev, "HWC RX: invalid rx_req_idx=%llu\n",
+			rx_req_idx);
 		return;
 	}
 
 	rx_req = &hwc_rxq->msg_buf->reqs[rx_req_idx];
 	resp = (struct gdma_resp_hdr *)rx_req->buf_va;
+
+	/* Validate resp_len covers the response header before reading
+	 * hwc_msg_id.  A short response leaves stale data from the
+	 * previous buffer occupant, which could match a live slot and
+	 * complete the wrong request.
+	 */
+	if (rx_oob->tx_oob_data_size < sizeof(*resp)) {
+		dev_err(hwc->dev, "HWC RX: short resp_len=%u\n",
+			rx_oob->tx_oob_data_size);
+		mana_hwc_post_rx_wqe(hwc_rxq, rx_req);
+		return;
+	}
 
 	/* Read msg_id once from DMA buffer to prevent TOCTOU:
 	 * DMA memory is shared/unencrypted in CVMs - host can
@@ -281,10 +312,11 @@ static void mana_hwc_rx_event_handler(void *ctx, u32 gdma_rxq_id,
 	msg_id = READ_ONCE(resp->response.hwc_msg_id);
 	if (msg_id >= hwc->num_inflight_msg) {
 		dev_err(hwc->dev, "HWC RX: wrong msg_id=%u\n", msg_id);
+		mana_hwc_post_rx_wqe(hwc_rxq, rx_req);
 		return;
 	}
 
-	mana_hwc_handle_resp(hwc, rx_oob->tx_oob_data_size, rx_req, msg_id);
+	mana_hwc_handle_resp(hwc, rx_oob->tx_oob_data_size, msg_id, rx_req);
 
 	/* Can no longer use 'resp', because the buffer is posted to the HW
 	 * in mana_hwc_handle_resp() above.
@@ -384,14 +416,17 @@ static void mana_hwc_comp_event(void *ctx, struct gdma_queue *q_self)
 
 static void mana_hwc_destroy_cq(struct gdma_context *gc, struct hwc_cq *hwc_cq)
 {
-	kfree(hwc_cq->comp_buf);
-
 	if (hwc_cq->gdma_cq)
 		mana_gd_destroy_queue(gc, hwc_cq->gdma_cq);
 
+	/* Destroy EQ before freeing comp_buf — EQ destroy calls
+	 * mana_gd_deregister_irq() + synchronize_rcu(), ensuring
+	 * no interrupt handler can touch comp_buf after this.
+	 */
 	if (hwc_cq->gdma_eq)
 		mana_gd_destroy_queue(gc, hwc_cq->gdma_eq);
 
+	kfree(hwc_cq->comp_buf);
 	kfree(hwc_cq);
 }
 
@@ -728,14 +763,14 @@ static int mana_hwc_init_queues(struct hw_channel_context *hwc, u16 q_depth,
 		goto out;
 	}
 
-	err = mana_hwc_create_wq(hwc, GDMA_RQ, q_depth, max_req_msg_size,
+	err = mana_hwc_create_wq(hwc, GDMA_RQ, q_depth, max_resp_msg_size,
 				 hwc->cq, &hwc->rxq);
 	if (err) {
 		dev_err(hwc->dev, "Failed to create HWC RQ: %d\n", err);
 		goto out;
 	}
 
-	err = mana_hwc_create_wq(hwc, GDMA_SQ, q_depth, max_resp_msg_size,
+	err = mana_hwc_create_wq(hwc, GDMA_SQ, q_depth, max_req_msg_size,
 				 hwc->cq, &hwc->txq);
 	if (err) {
 		dev_err(hwc->dev, "Failed to create HWC SQ: %d\n", err);
@@ -744,6 +779,7 @@ static int mana_hwc_init_queues(struct hw_channel_context *hwc, u16 q_depth,
 
 	hwc->num_inflight_msg = q_depth;
 	hwc->max_req_msg_size = max_req_msg_size;
+	hwc->max_resp_msg_size = max_resp_msg_size;
 
 	return 0;
 out:
