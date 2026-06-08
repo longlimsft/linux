@@ -160,6 +160,7 @@ static int mana_gd_init_registers(struct pci_dev *pdev)
 bool mana_need_log(struct gdma_context *gc, int err)
 {
 	struct hw_channel_context *hwc;
+	bool need_log = true;
 
 	if (err != -ETIMEDOUT)
 		return true;
@@ -167,11 +168,13 @@ bool mana_need_log(struct gdma_context *gc, int err)
 	if (!gc)
 		return true;
 
-	hwc = gc->hwc.driver_data;
+	rcu_read_lock();
+	hwc = rcu_dereference(gc->hwc.driver_data);
 	if (hwc && hwc->hwc_timeout == 0)
-		return false;
+		need_log = false;
+	rcu_read_unlock();
 
-	return true;
+	return need_log;
 }
 
 static int mana_gd_query_max_resources(struct pci_dev *pdev)
@@ -364,9 +367,24 @@ static int mana_gd_detect_devices(struct pci_dev *pdev)
 int mana_gd_send_request(struct gdma_context *gc, u32 req_len, const void *req,
 			 u32 resp_len, void *resp)
 {
-	struct hw_channel_context *hwc = gc->hwc.driver_data;
+	struct hw_channel_context *hwc;
+	int err;
 
-	return mana_hwc_send_request(hwc, req_len, req, resp_len, resp);
+	rcu_read_lock();
+	hwc = rcu_dereference(gc->hwc.driver_data);
+	if (!hwc) {
+		rcu_read_unlock();
+		return -ENODEV;
+	}
+	atomic_inc(&hwc->active_senders);
+	rcu_read_unlock();
+
+	err = mana_hwc_send_request(hwc, req_len, req, resp_len, resp);
+
+	if (atomic_dec_and_test(&hwc->active_senders))
+		wake_up(&gc->hwc_drain_waitq);
+
+	return err;
 }
 EXPORT_SYMBOL_NS(mana_gd_send_request, "NET_MANA");
 
@@ -600,14 +618,17 @@ static void mana_serv_reset(struct pci_dev *pdev)
 		return;
 	}
 
-	hwc = gc->hwc.driver_data;
+	rcu_read_lock();
+	hwc = rcu_dereference(gc->hwc.driver_data);
 	if (!hwc) {
+		rcu_read_unlock();
 		dev_err(&pdev->dev, "MANA service: no HWC\n");
 		goto out;
 	}
 
 	/* HWC is not responding in this case, so don't wait */
 	hwc->hwc_timeout = 0;
+	rcu_read_unlock();
 
 	dev_info(&pdev->dev, "MANA reset cycle start\n");
 
@@ -1160,6 +1181,12 @@ static int mana_gd_create_dma_region(struct gdma_dev *gd,
 	if (!MANA_PAGE_ALIGNED(gmi->virt_addr))
 		return -EINVAL;
 
+	/* No RCU needed: called only from mana_gd_alloc_memory during
+	 * queue creation (netdev open under RTNL, RDMA verbs, or init).
+	 * mana_gd_suspend tears down all queues via mana_remove/
+	 * mana_rdma_remove before calling mana_hwc_destroy_channel,
+	 * so no concurrent destroy can race with this path.
+	 */
 	hwc = gc->hwc.driver_data;
 	req_msg_size = struct_size(req, page_addr_list, num_page);
 	if (req_msg_size > hwc->max_req_msg_size)
@@ -1347,7 +1374,13 @@ int mana_gd_verify_vf_version(struct pci_dev *pdev)
 	struct hw_channel_context *hwc;
 	int err;
 
+	/* No RCU needed: called only from mana_gd_setup during PCI
+	 * probe (single-threaded) or resume (serialized by
+	 * GC_IN_SERVICE).  Destroy runs sequentially after suspend
+	 * completes, never concurrently with this function.
+	 */
 	hwc = gc->hwc.driver_data;
+
 	mana_gd_init_req_hdr(&req.hdr, GDMA_VERIFY_VF_DRIVER_VERSION,
 			     sizeof(req), sizeof(resp));
 
