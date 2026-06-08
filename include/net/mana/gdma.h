@@ -444,6 +444,12 @@ struct gdma_context {
 	/* Hardware communication channel (HWC) */
 	struct gdma_dev		hwc;
 
+	/* destroy_channel() waits here for all HWC senders to exit.
+	 * Lives on gc (not hwc) so wake_up() after the last sender's
+	 * atomic_dec doesn't dereference freed hwc memory.
+	 */
+	wait_queue_head_t	hwc_drain_waitq;
+
 	/* Azure network adapter */
 	struct gdma_dev		mana;
 
