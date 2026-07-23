@@ -2108,6 +2108,37 @@ return_null_message:
 	msg->data = 0;
 }
 
+static int hv_pcie_msi_set_affinity(struct irq_data *data,
+				    const struct cpumask *mask, bool force)
+{
+	int ret = irq_chip_set_affinity_parent(data, mask, force);
+
+	/*
+	 * HvCallRetargetDeviceInterrupt (issued from hv_arch_irq_unmask()
+	 * shortly after this call returns) is asynchronous - the host may
+	 * still deliver an in-flight interrupt to the old vCPU's virtual
+	 * APIC IRR after this function returns.  During CPU hot-unplug,
+	 * the outgoing CPU cannot handle a late delivery, and fixup_irqs()'s
+	 * IRR-scan safety net only fires when is_vector_pending() observes
+	 * the bit before mdelay(1) elapses, which is not guaranteed for the
+	 * asynchronous host injection window.
+	 *
+	 * Fire a phantom IPI on the new target unconditionally so any raced
+	 * completion is drained there.  Completion-draining handlers (NVMe,
+	 * netdev NAPI) iterate over the device's completion queue and stop
+	 * when it is empty, so an extra ISR is harmless.
+	 *
+	 * The wrapper is gated by !cpu_online(smp_processor_id()) so it
+	 * only fires from the fixup_irqs() context on the CPU being taken
+	 * offline; routine affinity changes on live CPUs are unaffected.
+	 */
+	if (IS_ENABLED(CONFIG_X86) && ret >= 0 &&
+	    !cpu_online(smp_processor_id()))
+		irq_chip_retrigger_hierarchy(data);
+
+	return ret;
+}
+
 static bool hv_pcie_init_dev_msi_info(struct device *dev, struct irq_domain *domain,
 				      struct irq_domain *real_parent, struct msi_domain_info *info)
 {
@@ -2118,7 +2149,14 @@ static bool hv_pcie_init_dev_msi_info(struct device *dev, struct irq_domain *dom
 
 	info->ops->msi_prepare = hv_msi_prepare;
 
-	chip->irq_set_affinity = irq_chip_set_affinity_parent;
+	chip->irq_set_affinity = hv_pcie_msi_set_affinity;
+
+	/*
+	 * Set irq_retrigger so paths that consult the outermost chip
+	 * callback (e.g. check_irq_resend()) can walk the hierarchy down
+	 * to lapic_controller.
+	 */
+	chip->irq_retrigger = irq_chip_retrigger_hierarchy;
 
 	if (IS_ENABLED(CONFIG_X86))
 		chip->flags |= IRQCHIP_MOVE_DEFERRED;
