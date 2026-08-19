@@ -180,6 +180,7 @@ static int mana_gd_query_max_resources(struct pci_dev *pdev)
 	struct gdma_query_max_resources_resp resp = {};
 	struct gdma_general_req req = {};
 	unsigned int max_num_queues;
+	unsigned int msix_vec_count;
 	u8 bm_hostmode;
 	u16 num_ports;
 	int err;
@@ -214,6 +215,28 @@ static int mana_gd_query_max_resources(struct pci_dev *pdev)
 		 * (num_msix_usable - 1 HWC) <= num_online_cpus()
 		 */
 		gc->num_msix_usable = min(resp.max_msix, num_online_cpus() + 1);
+	}
+
+	/* Dynamic MSI-X vectors are allocated by index into the device MSI-X
+	 * table, so the table size is a hard upper bound that is independent
+	 * of resp.max_msix and of the CPU count. On large VMs the table can be
+	 * the smaller of the three, e.g. a 1024 entry table on a 1792 vCPU
+	 * host. An out of range index is only rejected by the MSI core when
+	 * the device has a per-device MSI-X domain sized by the table; with a
+	 * global PCI/MSI domain it walks off the end of the mapped table.
+	 */
+	err = pci_msix_vec_count(pdev);
+	if (err <= 0) {
+		dev_err(gc->dev, "Failed to query MSI-X table size: %d\n", err);
+		return err < 0 ? err : -ENOSPC;
+	}
+	msix_vec_count = err;
+
+	if (gc->num_msix_usable > msix_vec_count) {
+		dev_info(gc->dev,
+			 "Limiting MSI-X vectors from %u to table size %u\n",
+			 gc->num_msix_usable, msix_vec_count);
+		gc->num_msix_usable = msix_vec_count;
 	}
 
 	if (gc->num_msix_usable <= 1)
