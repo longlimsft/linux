@@ -4024,6 +4024,12 @@ int mana_rdma_probe(struct gdma_dev *gd)
 	if (err)
 		return err;
 
+	/* Clear the state left behind by a previous mana_rdma_remove() so
+	 * that servicing events are handled again after a reset cycle.
+	 */
+	WRITE_ONCE(gd->rdma_teardown, false);
+	gd->is_suspended = false;
+
 	err = add_adev(gd, "rdma");
 	if (err)
 		mana_gd_deregister_device(gd);
