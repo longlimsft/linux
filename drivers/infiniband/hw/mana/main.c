@@ -172,8 +172,12 @@ int mana_ib_dealloc_pd(struct ib_pd *ibpd, struct ib_udata *udata)
 		return err;
 
 	dev = container_of(ibdev, struct mana_ib_dev, ib_dev);
+
+	/* The PD is gone once a service reset disables the HWC, so do not
+	 * report an error the RDMA core cannot retry.
+	 */
 	err = mana_gd_destroy_pd(dev, pd->pd_handle);
-	if (err)
+	if (err && !mana_hwc_disabled_err(mdev_to_gc(dev), err))
 		return err;
 
 	return 0;

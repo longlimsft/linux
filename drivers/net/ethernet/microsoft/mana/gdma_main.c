@@ -156,22 +156,34 @@ static int mana_gd_init_registers(struct pci_dev *pdev)
 		return mana_gd_init_vf_regs(pdev);
 }
 
-/* Suppress logging when we set timeout to zero */
-bool mana_need_log(struct gdma_context *gc, int err)
+/* Check whether a HWC command failed only because the HWC is disabled.
+ *
+ * The HWC timeout is set to zero when the hardware stops responding and a
+ * service reset is started. From that point on every command fails right
+ * away with -ETIMEDOUT without ever reaching the firmware. The reset
+ * releases all firmware resources, so cleanup paths can treat such an error
+ * as success instead of reporting a failure they cannot act on.
+ */
+bool mana_hwc_disabled_err(struct gdma_context *gc, int err)
 {
 	struct hw_channel_context *hwc;
 
 	if (err != -ETIMEDOUT)
-		return true;
-
-	if (!gc)
-		return true;
-
-	hwc = gc->hwc.driver_data;
-	if (hwc && hwc->hwc_timeout == 0)
 		return false;
 
-	return true;
+	if (!gc)
+		return false;
+
+	hwc = gc->hwc.driver_data;
+
+	return hwc && hwc->hwc_timeout == 0;
+}
+EXPORT_SYMBOL_NS(mana_hwc_disabled_err, "NET_MANA");
+
+/* Suppress logging when we set timeout to zero */
+bool mana_need_log(struct gdma_context *gc, int err)
+{
+	return !mana_hwc_disabled_err(gc, err);
 }
 
 static int mana_gd_query_max_resources(struct pci_dev *pdev)

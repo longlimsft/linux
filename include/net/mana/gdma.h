@@ -1040,6 +1040,7 @@ int mana_gd_suspend(struct pci_dev *pdev, pm_message_t state);
 int mana_gd_resume(struct pci_dev *pdev);
 
 bool mana_need_log(struct gdma_context *gc, int err);
+bool mana_hwc_disabled_err(struct gdma_context *gc, int err);
 
 struct gdma_irq_context *mana_gd_get_gic(struct gdma_context *gc,
 					 bool use_msi_bitmap,

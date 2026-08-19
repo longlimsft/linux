@@ -344,8 +344,16 @@ int mana_ib_dealloc_mw(struct ib_mw *ibmw)
 {
 	struct mana_ib_dev *dev = container_of(ibmw->device, struct mana_ib_dev, ib_dev);
 	struct mana_ib_mw *mw = container_of(ibmw, struct mana_ib_mw, ibmw);
+	int err;
 
-	return mana_ib_gd_destroy_mr(dev, mw->mw_handle);
+	/* The MW is gone once a service reset disables the HWC, so do not
+	 * report an error the RDMA core cannot retry.
+	 */
+	err = mana_ib_gd_destroy_mr(dev, mw->mw_handle);
+	if (err && !mana_hwc_disabled_err(mdev_to_gc(dev), err))
+		return err;
+
+	return 0;
 }
 
 int mana_ib_dereg_mr(struct ib_mr *ibmr, struct ib_udata *udata)
@@ -361,8 +369,12 @@ int mana_ib_dereg_mr(struct ib_mr *ibmr, struct ib_udata *udata)
 
 	dev = container_of(ibdev, struct mana_ib_dev, ib_dev);
 
+	/* A service reset disables the HWC and releases the firmware
+	 * resources. Reporting the error would leave the object on the
+	 * uverbs cleanup list and leak it, so free the software state.
+	 */
 	err = mana_ib_gd_destroy_mr(dev, mr->mr_handle);
-	if (err)
+	if (err && !mana_hwc_disabled_err(mdev_to_gc(dev), err))
 		return err;
 
 	if (mr->umem)
@@ -437,8 +449,11 @@ int mana_ib_dealloc_dm(struct ib_dm *ibdm, struct uverbs_attr_bundle *attrs)
 	struct mana_ib_dm *dm = container_of(ibdm, struct mana_ib_dm, ibdm);
 	int err;
 
+	/* The DM is gone once a service reset disables the HWC, so do not
+	 * report an error the RDMA core cannot retry.
+	 */
 	err = mana_ib_gd_destroy_dm(dev, dm);
-	if (err)
+	if (err && !mana_hwc_disabled_err(mdev_to_gc(dev), err))
 		return err;
 
 	kfree(dm);
